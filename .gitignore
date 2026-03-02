@@ -1,0 +1,46 @@
+arrangement.txt
+.env
+
+# =========================
+# Python & 环境相关
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 虚拟环境 (Virtual Environments)
+venv/
+.venv/
+env/
+ENV/
+
+# 包管理工具生成的目录
+*.egg-info/
+.installed.cfg
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt
+
+# =========================
+# 项目运行时产生的数据 & 缓存
+# =========================
+data/logs/
+data/cache/
+data/mock_dbs/
+data/state/
+
+*.db
+*.sqlite3
+
+
+chroma_db/
+
+# =========================
+# IDE & 操作系统配置
+# =========================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
