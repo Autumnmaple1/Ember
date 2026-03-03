@@ -30,7 +30,7 @@ def main():
     event_bus = EventBus()
     state_manager = StateManager(event_bus)
     heartbeat = Heartbeat(event_bus, interval=settings.HEARTBEAT_INTERVAL)
-    memory = ShortTermMemory(base_prompt=settings.SYSTEM_PROMPT)
+    memory = ShortTermMemory(base_prompt=settings.SYSTEM_PROMPT, context_window_size=settings.CONTEXT_WINDOW_SIZE)
     brain = Brain(event_bus, state_manager, memory)
 
     heartbeat.start()

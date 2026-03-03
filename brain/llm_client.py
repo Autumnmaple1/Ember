@@ -7,7 +7,6 @@ logger = logging.getLogger(__name__)
 
 class LLMClient:
     def __init__(self):
-        # 复用 OpenAI 客户端实例，减少重复实例化开销
         self.large_client = OpenAI(
             api_key=settings.LARGE_LLM.api_key,
             base_url=settings.LARGE_LLM.base_url,

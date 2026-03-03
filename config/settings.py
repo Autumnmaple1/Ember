@@ -54,5 +54,7 @@ class Settings:
         time.time(),
     )
 
+    CONTEXT_WINDOW_SIZE = int(os.getenv("CONTEXT_WINDOW_SIZE", "20"))
+
 
 settings = Settings()

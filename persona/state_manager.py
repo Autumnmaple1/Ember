@@ -49,17 +49,32 @@ class StateManager:
         upper = time * 1.1
         return random.uniform(lower, upper)
 
+    def _format_duration(self, seconds: float):
+        days = int(seconds // (24 * 3600))
+        rem = seconds % (24 * 3600)
+        hours = int(rem // 3600)
+        rem %= 3600
+        minutes = int(rem // 60)
+        secs = int(rem % 60)
+        
+        parts = []
+        if days > 0: parts.append(f"{days}天")
+        if hours > 0: parts.append(f"{hours}小时")
+        if minutes > 0: parts.append(f"{minutes}分钟")
+        if secs > 0 or not parts: parts.append(f"{secs}秒")
+        return "".join(parts)
+
     def _get_idle_info(self, logical_now):
         logical_elapsed = logical_now - self.last_interaction_logical_time
         return {
-            "idle_minutes": int(logical_elapsed / 60),
+            "idle_duration": self._format_duration(logical_elapsed),
             "current_time": self._format_logical_time(logical_now, "%H:%M"),
             "old_state": json.dumps(self.current_state, ensure_ascii=False),
         }
 
     def _apply_idle_template(self, template, info):
         return (
-            template.replace("{{idle_minutes}}", str(info["idle_minutes"]))
+            template.replace("{{idle_minutes}}", info["idle_duration"])
             .replace("{{current_time}}", info["current_time"])
             .replace("{{old_state}}", info["old_state"])
         )
