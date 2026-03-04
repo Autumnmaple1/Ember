@@ -100,7 +100,7 @@ class EpisodicMemory:
 
         def get_keywords_task():
             prompt = f"从以下查询中提取3-5个核心关键词，以逗号分隔：{query}"
-            response = self.llm_client.one_chat(prompt)
+            response = self.llm_client.one_chat(settings.SMALL_LLM, prompt)
             keywords = [k.strip() for k in response.split(",") if k.strip()]
             return keywords
 
