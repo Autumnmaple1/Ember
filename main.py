@@ -9,6 +9,8 @@ from memory.short_term import ShortTermMemory
 from config.settings import settings
 import config.logging_config
 import logging
+from memory.episodic_memory import EpisodicMemory
+from memory.memory_process import Hippocampus
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,8 @@ def main():
     )
     memory.clear_memory()
     brain = Brain(event_bus, state_manager, memory)
+    episodic_memory = EpisodicMemory(event_bus)
+    hippocampus = Hippocampus(event_bus)
 
     heartbeat.start()
 

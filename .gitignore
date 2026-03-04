@@ -22,6 +22,7 @@ ENV/
 *.egg
 pip-log.txt
 pip-delete-this-directory.txt
+chat_history.log
 
 # =========================
 # 项目运行时产生的数据 & 缓存

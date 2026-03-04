@@ -39,7 +39,8 @@ class Brain:
         self._llm_speak(self.memory, pack=True)
 
     def process_dialogue(self, user_message):
-        history = json.dumps(self.get_memory())
+        self.memory.add_message("user", user_message)
+        history = json.dumps(self.memory.get_memory())
 
         need_memory = (
             self.llm_client.one_chat(
@@ -47,15 +48,19 @@ class Brain:
                 messages=[
                     {
                         "role": "user",
-                        "content": f"{settings.MEMORY_JUDGE_PROMPT}：{history}",
+                        "content": f"{settings.MEMORY_JUDGE_PROMPT}\n\n对话历史：{history}\n\n",
                     }
                 ],
             )
             .strip()
             .lower()
         )
-        memory = None
+        logger.info(
+            f"LLM判断是否需要相关记忆: {need_memory}\n\n当前对话历史: {settings.MEMORY_JUDGE_PROMPT}\n\n对话历史：{history}\n\n用户最新消息：{user_message}"
+        )
+        memories = None
         if need_memory == "yes":
+            logger.info("LLM判断需要相关记忆，正在查询...")
             memories = json.dumps(self.get_persistence_memory(user_message))
             self.memory.async_log("chat_history.log", f"Memory: {memories}")
 
@@ -64,8 +69,6 @@ class Brain:
             dynamic_prompt += f"\n\n可能用到的记忆：{memories}"
 
         self.memory.update_base_prompt(dynamic_prompt)
-
-        self.memory.add_message("user", user_message)
 
         self._llm_speak(self.memory, pack=False)
 
