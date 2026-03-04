@@ -79,7 +79,7 @@ class EpisodicMemory:
         try:
             embedding = self.llm_client.get_embedding(settings.EMBEDDING_MODEL, content)
             insight_embedding = self.llm_client.get_embedding(
-                settings.INSIGHT_EMBEDDING_MODEL, insight
+                settings.EMBEDDING_MODEL, insight
             )
             event_data["embedding"] = embedding
             event_data["insight_embedding"] = insight_embedding

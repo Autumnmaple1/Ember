@@ -70,11 +70,11 @@ class LLMClient:
             yield f"[Error]: {str(e)}"
             logger.error(f"Streaming Chat Error: {e}")
 
-    def get_embedding(self, text: str):
+    def get_embedding(self, model_config, text: str):
         client = self.embedding_client
         try:
             response = client.embeddings.create(
-                model=settings.EMBEDDING_MODEL.name,
+                model=model_config.name,
                 input=text,
                 dimensions=1536,
             )

@@ -48,7 +48,7 @@ class Brain:
                 messages=[
                     {
                         "role": "user",
-                        "content": f"{settings.MEMORY_JUDGE_PROMPT}\n\n对话历史：{history}\n\n",
+                        "content": f"{settings.MEMORY_JUDGE_PROMPT}\n\n对话历史：{history}\n\n用户最新消息：{user_message}",
                     }
                 ],
             )
