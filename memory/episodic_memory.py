@@ -88,7 +88,7 @@ class EpisodicMemory:
             event_data["insight_embedding"] = insight_embedding
             self._add_memory(event_data)
         except Exception as e:
-            logging.error(f"Failed to process memory store request: {e}")
+            logger.error(f"Failed to process memory store request: {e}")
 
     def _on_query_request(self, event: Event):
         query = event.data.get("query", "")
@@ -100,7 +100,7 @@ class EpisodicMemory:
 
         def get_keywords_task():
             prompt = f"从以下查询中提取3-5个核心关键词，以逗号分隔：{query}"
-            response = self.llm_client.generate(prompt)
+            response = self.llm_client.one_chat(prompt)
             keywords = [k.strip() for k in response.split(",") if k.strip()]
             return keywords
 
@@ -111,7 +111,7 @@ class EpisodicMemory:
                 embedding = future_embedding.result(timeout=10)
                 keywords = future_keywords.result(timeout=10)
             except Exception as e:
-                logging.warning(
+                logger.warning(
                     f"Error occurred while retrieving embedding or keywords: {e}"
                 )
                 embedding = None
@@ -149,7 +149,7 @@ class EpisodicMemory:
                 )
                 self.conn.commit()
         except Exception as e:
-            logging.error(f"Failed to update importance for memory {event_id}: {e}")
+            logger.error(f"Failed to update access count for memory {event_id}: {e}")
 
     def _sleep_memory_process(self, event: Event):
         pass
