@@ -56,5 +56,15 @@ class Settings:
 
     CONTEXT_WINDOW_SIZE = int(os.getenv("CONTEXT_WINDOW_SIZE", "20"))
 
+    PG_HOST = os.getenv("PG_HOST", "localhost")
+    PG_PORT = int(os.getenv("PG_PORT", "5432"))
+    PG_USER = os.getenv("PG_USER", "postgres")
+    PG_PASSWORD = os.getenv("PG_PASSWORD", "your_password")
+    PG_DB = os.getenv("PG_DB", "ember_db")
+
+    MEMORY_JUDGE_PROMPT = PROMPTS.get("memory_judge_prompt", "")
+    MEMORY_ENCODING_PROMPT = PROMPTS.get("memory_encoding_prompt", "")
+    RECALL_TOP_K = int(os.getenv("RECALL_TOP_K", "10"))
+
 
 settings = Settings()

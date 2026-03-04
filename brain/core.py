@@ -5,6 +5,7 @@ from core.event_bus import EventBus, Event
 from persona.state_manager import StateManager
 import threading
 import logging
+import concurrent.futures
 import json
 
 logger = logging.getLogger(__name__)
@@ -38,13 +39,46 @@ class Brain:
         self._llm_speak(self.memory, pack=True)
 
     def process_dialogue(self, user_message):
+        history = json.dumps(self.get_memory())
+
+        need_memory = (
+            self.llm_client.one_chat(
+                model_config=settings.SMALL_LLM,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"{settings.MEMORY_JUDGE_PROMPT}：{history}",
+                    }
+                ],
+            )
+            .strip()
+            .lower()
+        )
+        memory = None
+        if need_memory == "yes":
+            memories = json.dumps(self.get_persistence_memory(user_message))
+            self.memory.async_log("chat_history.log", f"Memory: {memories}")
+
         dynamic_prompt = settings.SYSTEM_PROMPT + self.state_manager.prompt_injection
+        if memories:
+            dynamic_prompt += f"\n\n可能用到的记忆：{memories}"
 
         self.memory.update_base_prompt(dynamic_prompt)
 
         self.memory.add_message("user", user_message)
 
         self._llm_speak(self.memory, pack=False)
+
+    def get_persistence_memory(self, user_message):
+        future = concurrent.futures.Future()
+
+        def on_memory_retrieved(memories):
+            logger.info(f"Retrieved relevant memories: {memories}")
+            future.set_result(memories)
+
+        query_data = {"query": user_message, "callback": on_memory_retrieved}
+        self.event_bus.publish(Event("memory.query", query_data))
+        return future.result()
 
     def _llm_speak(self, memory, pack: bool = False):
         with self.lock:

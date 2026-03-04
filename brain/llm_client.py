@@ -15,6 +15,10 @@ class LLMClient:
             api_key=settings.SMALL_LLM.api_key,
             base_url=settings.SMALL_LLM.base_url,
         )
+        self.embedding_client = OpenAI(
+            api_key=settings.EMBEDDING_MODEL.api_key,
+            base_url=settings.EMBEDDING_MODEL.base_url,
+        )
 
     def one_chat(self, model_config, messages):
         client = (
@@ -54,7 +58,6 @@ class LLMClient:
             )
 
             for chunk in response:
-                # 捕获推理/思考过程 (Reasoning Content)
                 reasoning = getattr(chunk.choices[0].delta, "reasoning_content", None)
                 if reasoning:
                     yield f"{reasoning}"
@@ -64,4 +67,19 @@ class LLMClient:
                     yield content
 
         except Exception as e:
-            yield f"[发生内部错误: {e}]"
+            yield f"[Error]: {str(e)}"
+            logger.error(f"Streaming Chat Error: {e}")
+
+    def get_embedding(self, text: str):
+        client = self.embedding_client
+        try:
+            response = client.embeddings.create(
+                model=settings.EMBEDDING_MODEL.name,
+                input=text,
+                dimensions=1536,
+            )
+            embedding = response.data[0].embedding
+            return embedding
+        except Exception as e:
+            logger.error(f"Get Embedding Error: {e}")
+            return None

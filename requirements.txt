@@ -1,3 +1,5 @@
 openai
 dotenv
 pyyaml
+psycopg2
+numpy

@@ -5,6 +5,7 @@ from brain.llm_client import LLMClient
 from config.settings import settings
 from core.event_bus import EventBus, Event
 import random
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -15,21 +16,8 @@ class StateManager:
         self.event_bus = event_bus
         self.llm_client = LLMClient()
         self.state_update_timeout = settings.STATE_IDLE_MIN_TIMEOUT
-        self.time_accel_factor = settings.TIME_ACCEL_FACTOR
 
-        if isinstance(settings.START_TIME, str):
-            try:
-                self._base_logical_time = time.mktime(
-                    time.strptime(settings.START_TIME, "%Y-%m-%d %H:%M:%S")
-                )
-            except Exception:
-                self._base_logical_time = time.time()
-        else:
-            self._base_logical_time = float(settings.START_TIME)
-
-        self._real_start_time = time.time()
-
-        self.last_interaction_logical_time = self._base_logical_time
+        self.last_interaction_logical_time = self.event_bus.logical_now
 
         self.current_state = json.loads(settings.STATE)
         self.is_thinking = False
@@ -38,11 +26,10 @@ class StateManager:
         self.event_bus.subscribe("system.tick", self._on_tick)
 
     def _get_logical_now(self):
-        real_elapsed = time.time() - self._real_start_time
-        return self._base_logical_time + (real_elapsed * self.time_accel_factor)
+        return self.event_bus.logical_now
 
     def _format_logical_time(self, logical_time, fmt="%Y-%m-%d %H:%M:%S"):
-        return time.strftime(fmt, time.localtime(logical_time))
+        return self.event_bus.format_logical_time(logical_time, fmt)
 
     def _get_floating_timeout(self, time: float):
         lower = time * 0.9
@@ -56,19 +43,23 @@ class StateManager:
         rem %= 3600
         minutes = int(rem // 60)
         secs = int(rem % 60)
-        
+
         parts = []
-        if days > 0: parts.append(f"{days}天")
-        if hours > 0: parts.append(f"{hours}小时")
-        if minutes > 0: parts.append(f"{minutes}分钟")
-        if secs > 0 or not parts: parts.append(f"{secs}秒")
+        if days > 0:
+            parts.append(f"{days}天")
+        if hours > 0:
+            parts.append(f"{hours}小时")
+        if minutes > 0:
+            parts.append(f"{minutes}分钟")
+        if secs > 0 or not parts:
+            parts.append(f"{secs}秒")
         return "".join(parts)
 
     def _get_idle_info(self, logical_now):
         logical_elapsed = logical_now - self.last_interaction_logical_time
         return {
             "idle_duration": self._format_duration(logical_elapsed),
-            "current_time": self._format_logical_time(logical_now, "%H:%M"),
+            "current_time": self._format_logical_time(logical_now, "%Y-%m-%d %H:%M:%S"),
             "old_state": json.dumps(self.current_state, ensure_ascii=False),
         }
 
@@ -89,6 +80,22 @@ class StateManager:
             messages=messages,
         )
 
+    def _async_log(self, filename, content):
+        def _log():
+            with open(filename, "a", encoding="utf-8", buffering=1) as f:
+                f.write(content + "\n")
+
+        threading.Thread(target=_log).start()
+
+    def _update_state(self, new_state):
+        logical_time_str = self._format_logical_time(self._get_logical_now())
+        new_state["状态时间"] = logical_time_str
+        self._async_log(
+            "chat_history.log",
+            f"{{状态更新: {json.dumps(new_state, ensure_ascii=False)}}}",
+        )
+        self.current_state.update(new_state)
+
     def _on_llm_state_update(self, event: Event):
         if self.is_thinking:
             return
@@ -96,13 +103,15 @@ class StateManager:
         self.state_update_timeout = settings.STATE_IDLE_MIN_TIMEOUT
         self.is_thinking = True
         history = event.data.get("history", [])
-        prompt = f"{settings.SYSTEM_PROMPT}\n\n{settings.STATE_UPDATE_PROMPT}\n\n[近期对话记录]:\n{json.dumps(history, ensure_ascii=False)}"
+        prompt = f"{settings.SYSTEM_PROMPT}\n\n{settings.STATE_UPDATE_PROMPT}\n\n[先前状态]\n{json.dumps(self.current_state, ensure_ascii=False)}\n\n[近期对话记录]:\n{json.dumps(history, ensure_ascii=False)}"
 
         try:
             response = self._ask_llm(settings.SYSTEM_PROMPT, prompt)
             if response:
+
                 new_state = json.loads(response)
-                self.current_state.update(new_state)
+                self._update_state(new_state)
+
                 logical_time_str = self._format_logical_time(self._get_logical_now())
                 logger.info(f"[{logical_time_str}] 对话引发状态更新: {new_state}")
 
@@ -139,7 +148,15 @@ class StateManager:
                 if "action_pulse" in data:
                     del data["action_pulse"]
 
-                self.current_state.update(data)
+                self._update_state(data)
+
+                if impulse.get("memory_encode", False):
+                    self.event_bus.publish(
+                        Event(
+                            name="memory.preprocess",
+                            data={},
+                        )
+                    )
 
                 if impulse.get("should_speak", False):
                     self.event_bus.publish(
@@ -169,3 +186,12 @@ class StateManager:
         info = self._get_idle_info(logical_now)
         prompt = self._apply_idle_template(settings.IDLE_SPEAKING_UPDATE_PROMPT, info)
         return f"\n\n###你的任务###\n{prompt}\n\n"
+
+    @property
+    def state_detail(self):
+        return {
+            "state": self.current_state,
+            "last_update": self._format_logical_time(
+                self.last_interaction_logical_time
+            ),
+        }

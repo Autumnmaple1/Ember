@@ -29,6 +29,9 @@ pip-delete-this-directory.txt
 data/logs/
 data/cache/
 data/mock_dbs/
+data/db/neo4j_data/
+data/db/neo4j_logs/
+data/db/postgres_data/
 data/state/
 
 *.db
