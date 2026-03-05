@@ -38,6 +38,8 @@ class EpisodicMemory:
         self.event_bus.subscribe("memory.query", self._on_query_request)
 
         self.event_bus.subscribe("memory.sleep", self._sleep_memory_process)
+        
+        self.event_bus.subscribe("sleep", self._sleep_memory_process)
 
     def _init_db(self):
         with self.conn.cursor() as cur:
@@ -139,7 +141,8 @@ class EpisodicMemory:
                     """
                     UPDATE episodic_memory 
                     SET access_count = access_count + 1,
-                        last_accessed = CURRENT_TIMESTAMP
+                        last_accessed = CURRENT_TIMESTAMP,
+                        clarity = importance
                     WHERE id = %s
                     """,
                     (event_id,),
@@ -247,3 +250,20 @@ class EpisodicMemory:
                     }
                 )
             return memories
+        
+        
+    def _sleep_memory_process(self, event: Event):
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                UPDATE episodic_memory
+                SET clarity = importance * exp(
+                        -%s * (EXTRACT(EPOCH FROM (%s::timestamp - last_accessed)) / 86400.0) / (1 + access_count)
+                    )
+                    WHERE clarity > 0.01
+                """, (settings.MEMORY_DECENT_FACTOR, self.event_bus.formatted_logical_now))
+            cur.execute(
+                "DELETE FROM episodic_memory WHERE clarity < 0.05 AND access_count < 5"
+            )
+            self.conn.commit()
+            logger.info("Memory cleanup (deleted low clarity memories) completed.")
+            

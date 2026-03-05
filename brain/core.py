@@ -58,7 +58,7 @@ class Brain:
         keywords = resp.get("keywords", [])
         data = {"user_message": user_message, "key_words": keywords}
         memories = None
-        if need_memory:
+        if need_memory or True:
             logger.info("LLM判断需要相关记忆，正在查询...")
             logger.info(f"查询关键词: {keywords}")
             memories = json.dumps(self.get_persistence_memory(data), ensure_ascii=False)

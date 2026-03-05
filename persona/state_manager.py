@@ -21,6 +21,7 @@ class StateManager:
 
         self.current_state = settings.STATE
         self.is_thinking = False
+        self.is_sleeping = False
 
         self.event_bus.subscribe("user_interaction", self._on_llm_state_update)
         self.event_bus.subscribe("system.tick", self._on_tick)
@@ -160,6 +161,18 @@ class StateManager:
                             data={},
                         )
                     )
+                    
+                if impulse.get("is_sleeping", False) and not self.is_sleeping:
+                    self.is_sleeping = True
+                    self.event_bus.publish(
+                        Event(
+                            name="sleep",
+                            data={},
+                        )
+                    )
+                
+                if not impulse.get("is_sleeping", False):
+                    self.is_sleeping = False
 
                 if impulse.get("should_speak", False):
                     self.event_bus.publish(
