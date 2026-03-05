@@ -5,6 +5,7 @@ from core.event_bus import EventBus, Event
 from persona.state_manager import StateManager
 import threading
 import logging
+import concurrent.futures
 import json
 
 logger = logging.getLogger(__name__)
@@ -38,13 +39,49 @@ class Brain:
         self._llm_speak(self.memory, pack=True)
 
     def process_dialogue(self, user_message):
+        self.memory.add_message("user", user_message)
+        history = json.dumps(self.memory.get_memory(), ensure_ascii=False)
+
+        resp = self.llm_client.one_chat(
+            model_config=settings.SMALL_LLM,
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"{settings.MEMORY_JUDGE_PROMPT}\n\n对话历史：{history}",
+                }
+            ],
+        )
+        resp = resp.replace("True", "true").replace("False", "false")
+        resp = json.loads(resp)
+
+        need_memory = resp.get("need_memory", False)
+        keywords = resp.get("keywords", [])
+        data = {"user_message": user_message, "key_words": keywords}
+        memories = None
+        if need_memory:
+            logger.info("LLM判断需要相关记忆，正在查询...")
+            logger.info(f"查询关键词: {keywords}")
+            memories = json.dumps(self.get_persistence_memory(data), ensure_ascii=False)
+            self.memory.async_log("./config/chat_history.log", f"Memory: {memories}")
+
         dynamic_prompt = settings.SYSTEM_PROMPT + self.state_manager.prompt_injection
+        if memories:
+            dynamic_prompt += f"\n\n可能用到的记忆：{memories}"
 
         self.memory.update_base_prompt(dynamic_prompt)
 
-        self.memory.add_message("user", user_message)
-
         self._llm_speak(self.memory, pack=False)
+
+    def get_persistence_memory(self, query_data):
+        future = concurrent.futures.Future()
+
+        def on_memory_retrieved(memories):
+            logger.info(f"Retrieved relevant memories: {memories}")
+            future.set_result(memories)
+
+        query_data["callback"] = on_memory_retrieved
+        self.event_bus.publish(Event("memory.query", query_data))
+        return future.result()
 
     def _llm_speak(self, memory, pack: bool = False):
         with self.lock:

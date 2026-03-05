@@ -1,22 +1,25 @@
-arrangement.txt
+# =========================
+# 系统 & 开发计划
+# =========================
 .env
+arrangement.txt
 
 # =========================
-# Python & 鐜鐩稿叧
+# Python & 环境相关
 # =========================
 __pycache__/
 *.py[cod]
-*$py.class
+*.class
 *.so
 .Python
 
-# 铏氭嫙鐜 (Virtual Environments)
+# 虚拟环境 (Virtual Environments)
 venv/
 .venv/
 env/
 ENV/
 
-# 鍖呯鐞嗗伐鍏风敓鎴愮殑鐩綍
+# 包管理工具生成的目录
 *.egg-info/
 .installed.cfg
 *.egg
@@ -24,21 +27,28 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 # =========================
-# 椤圭洰杩愯鏃朵骇鐢熺殑鏁版嵁 & 缂撳瓨
+# 项目运行时产生的数据 & 数据库
 # =========================
 data/logs/
 data/cache/
-data/mock_dbs/
+data/db/
 data/state/
+data/vector_store/
 
 *.db
 *.sqlite3
-
-
 chroma_db/
 
 # =========================
-# IDE & 鎿嶄綔绯荤粺閰嶇疆
+# 配置文件中的记录/缓存
+# =========================
+config/chat_history.log
+config/chat_memory.json
+config/state.json
+
+
+# =========================
+# IDE & 操作系统配置
 # =========================
 .vscode/
 .idea/
