@@ -56,6 +56,10 @@ class Settings:
         "START_TIME",
         time.time(),
     )
+    if START_TIME=="?":
+        with open("./config/state.json", "r", encoding="utf-8") as f:
+            state_data = json.load(f)
+        START_TIME = state_data.get("对应时间", time.time())
 
     CONTEXT_WINDOW_SIZE = int(os.getenv("CONTEXT_WINDOW_SIZE", "20"))
 

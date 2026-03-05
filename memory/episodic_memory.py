@@ -188,7 +188,7 @@ class EpisodicMemory:
                 FROM episodic_memory ORDER BY 
                 GREATEST((1 - (embedding <=> %s::vector)), (1 - (insight_embedding <=> %s::vector))) 
                 * importance 
-                * exp(-%s * (EXTRACT(EPOCH FROM (%s::timestamp - last_accessed)) / 86400.0) / (1 + access_count)) DESC
+                * exp(-%s * (EXTRACT(EPOCH FROM (%s::timestamp - last_accessed)) / 86400.0) / (2 + access_count)) DESC
                 LIMIT %s
                 """,
                 (
@@ -257,12 +257,12 @@ class EpisodicMemory:
             cur.execute("""
                 UPDATE episodic_memory
                 SET clarity = importance * exp(
-                        -%s * (EXTRACT(EPOCH FROM (%s::timestamp - last_accessed)) / 86400.0) / (1 + access_count)
+                        -%s * (EXTRACT(EPOCH FROM (%s::timestamp - last_accessed)) / 86400.0) / (2 + access_count)
                     )
                     WHERE clarity > 0.01
                 """, (settings.MEMORY_DECENT_FACTOR, self.event_bus.formatted_logical_now))
             cur.execute(
-                "DELETE FROM episodic_memory WHERE clarity < 0.05 AND access_count < 5"
+                "DELETE FROM episodic_memory WHERE clarity < 0.1 AND access_count < 5"
             )
             self.conn.commit()
             logger.info("Memory cleanup (deleted low clarity memories) completed.")
