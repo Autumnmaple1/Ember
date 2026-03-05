@@ -3,6 +3,7 @@ import dotenv
 from dataclasses import dataclass
 import yaml
 import time
+import json
 
 dotenv.load_dotenv()
 
@@ -38,8 +39,10 @@ class Settings:
     with open("./config/prompts.yaml", "r", encoding="utf-8") as f:
         PROMPTS = yaml.safe_load(f)
 
+    with open("./config/state.json", "r", encoding="utf-8") as f:
+        STATE = json.load(f)
+
     SYSTEM_PROMPT = PROMPTS.get("core_persona", "")
-    STATE = PROMPTS.get("state", "")
     STATE_UPDATE_PROMPT = PROMPTS.get("state_update_prompt", "")
 
     STATE_IDLE_MAX_TIMEOUT = int(os.getenv("STATE_IDLE_MAX_TIMEOUT", "3600"))
@@ -55,6 +58,17 @@ class Settings:
     )
 
     CONTEXT_WINDOW_SIZE = int(os.getenv("CONTEXT_WINDOW_SIZE", "20"))
+
+    PG_HOST = os.getenv("PG_HOST", "localhost")
+    PG_PORT = int(os.getenv("PG_PORT", "5432"))
+    PG_USER = os.getenv("PG_USER", "postgres")
+    PG_PASSWORD = os.getenv("PG_PASSWORD", "your_password")
+    PG_DB = os.getenv("PG_DB", "ember_db")
+
+    MEMORY_JUDGE_PROMPT = PROMPTS.get("memory_judge_prompt", "")
+    MEMORY_ENCODING_PROMPT = PROMPTS.get("memory_encoding_prompt", "")
+    MEMORY_DECENT_FACTOR = float(os.getenv("MEMORY_DECENT_FACTOR", "0.5"))
+    RECALL_TOP_K = int(os.getenv("RECALL_TOP_K", "10"))
 
 
 settings = Settings()

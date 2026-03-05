@@ -1,4 +1,6 @@
 import json
+import threading
+import os
 
 
 class ShortTermMemory:
@@ -9,6 +11,16 @@ class ShortTermMemory:
         if base_prompt:
             self.base_prompt = base_prompt
         self.current_state = state
+        self._load_memory()
+
+    def _load_memory(self):
+        try:
+            if os.path.exists("./config/chat_memory.json"):
+                with open("./config/chat_memory.json", "r", encoding="utf-8") as f:
+                    self.memory = json.load(f)
+                    self._truncate_memory()
+        except Exception as e:
+            print(f"Error loading memory: {e}")
 
     def _add_front(self, role, content):
         self.memory.insert(0, {"role": role, "content": content})
@@ -22,8 +34,34 @@ class ShortTermMemory:
         if len(self.memory) > self.max_memory_size:
             self.memory = self.memory[-self.max_memory_size :]
 
+    def async_log(self, filename, content):
+        def _log():
+            with open(filename, "a", encoding="utf-8", buffering=1) as f:
+                f.write(content + "\n")
+
+        threading.Thread(target=_log).start()
+
+    def _async_log_clear(self, filename):
+        def _log():
+            with open(filename, "w", encoding="utf-8", buffering=1) as f:
+                f.write("")
+
+        threading.Thread(target=_log).start()
+
     def add_message(self, role, content):
+        self.async_log("./config/chat_history.log", f"{role}: {content}")
         self._add_back(role, content)
+        self._save_memory()
+
+    def _save_memory(self):
+        def _save():
+            try:
+                with open("./config/chat_memory.json", "w", encoding="utf-8") as f:
+                    json.dump(self.memory, f, ensure_ascii=False, indent=4)
+            except Exception as e:
+                print(f"Error saving memory: {e}")
+
+        threading.Thread(target=_save).start()
 
     def update_base_prompt(self, new_base_prompt):
         self.base_prompt = new_base_prompt
@@ -39,3 +77,4 @@ class ShortTermMemory:
 
     def clear_memory(self):
         self.memory = []
+        self._async_log_clear("./config/chat_history.log")
