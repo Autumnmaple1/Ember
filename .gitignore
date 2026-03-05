@@ -1,12 +1,15 @@
-arrangement.txt
+# =========================
+# 系统 & 开发计划
+# =========================
 .env
+arrangement.txt
 
 # =========================
 # Python & 环境相关
 # =========================
 __pycache__/
 *.py[cod]
-*$py.class
+*.class
 *.so
 .Python
 
@@ -24,18 +27,24 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 # =========================
-# 项目运行时产生的数据 & 缓存
+# 项目运行时产生的数据 & 数据库
 # =========================
 data/logs/
 data/cache/
-data/mock_dbs/
+data/db/
 data/state/
+data/vector_store/
 
 *.db
 *.sqlite3
-
-
 chroma_db/
+
+# =========================
+# 配置文件中的记录/缓存
+# =========================
+config/chat_history.log
+config/chat_memory.json
+
 
 # =========================
 # IDE & 操作系统配置
