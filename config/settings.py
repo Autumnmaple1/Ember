@@ -36,12 +36,29 @@ class Settings:
 
     HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "10"))
 
-    with open("./config/prompts.yaml", "r", encoding="utf-8") as f:
-        PROMPTS = yaml.safe_load(f)
+    # 加载 prompts.yaml
+    if os.path.exists("./config/prompts.yaml"):
+        with open("./config/prompts.yaml", "r", encoding="utf-8") as f:
+            PROMPTS = yaml.safe_load(f) or {}
+    else:
+        PROMPTS = {}
 
-    with open("./config/state.json", "r", encoding="utf-8") as f:
-        STATE = json.load(f)
-        
+    # 加载 STATE
+    STATE = {}
+    if os.path.exists("./config/state.json"):
+        with open("./config/state.json", "r", encoding="utf-8") as f:
+            try:
+                STATE = json.load(f)
+            except json.JSONDecodeError:
+                STATE = {}
+    
+    if not STATE and os.path.exists("./config/state_default.json"):
+        with open("./config/state_default.json", "r", encoding="utf-8") as f:
+            try:
+                STATE = json.load(f)
+            except json.JSONDecodeError:
+                STATE = {}
+
     CORE_PERSONA = PROMPTS.get("core_persona", "")
     SYSTEM_PROMPT = CORE_PERSONA+PROMPTS.get("system_prompt", "")
     STATE_UPDATE_PROMPT = PROMPTS.get("state_update_prompt", "")

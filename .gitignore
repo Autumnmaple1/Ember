@@ -12,7 +12,6 @@ __pycache__/
 *.class
 *.so
 .Python
-main_ui.py
 
 # ÐéÄâ»·¾³ (Virtual Environments)
 venv/
