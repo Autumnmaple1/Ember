@@ -1,6 +1,7 @@
 import time
 import queue
 import threading
+
 from core.event_bus import EventBus, Event
 from core.heartbeat import Heartbeat
 from persona.state_manager import StateManager
@@ -30,15 +31,17 @@ def get_user_input():
 
 def main():
     event_bus = EventBus()
-    state_manager = StateManager(event_bus)
+
     heartbeat = Heartbeat(event_bus, interval=settings.HEARTBEAT_INTERVAL)
     memory = ShortTermMemory(
         base_prompt=settings.SYSTEM_PROMPT,
         max_memory_size=settings.CONTEXT_WINDOW_SIZE,
     )
-    brain = Brain(event_bus, state_manager, memory)
+    
     episodic_memory = EpisodicMemory(event_bus)
     hippocampus = Hippocampus(event_bus)
+    state_manager = StateManager(event_bus, hippocampus,memory)
+    brain = Brain(event_bus, state_manager, memory,hippocampus)
 
     heartbeat.start()
 

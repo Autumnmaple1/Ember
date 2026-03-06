@@ -100,7 +100,7 @@ class EpisodicMemory:
             logger.error(f"Failed to process memory store request: {e}")
 
     def _on_query_request(self, event: Event):
-        query = event.data.get("user_message", "")
+        query = event.data.get("query", "")
         key_words = event.data.get("key_words", [])
         if not query and not key_words:
             if "callback" in event.data:
@@ -142,7 +142,7 @@ class EpisodicMemory:
                     UPDATE episodic_memory 
                     SET access_count = access_count + 1,
                         last_accessed = CURRENT_TIMESTAMP,
-                        clarity = importance
+                        clarity = LEAST(5.0, clarity + (importance * exp(-clarity / 1)))
                     WHERE id = %s
                     """,
                     (event_id,),
@@ -185,10 +185,8 @@ class EpisodicMemory:
                 (1 - (embedding <=> %s::vector)) as similarity1,
                 (1 - (insight_embedding <=> %s::vector)) as similarity2,
                 time
-                FROM episodic_memory ORDER BY 
-                GREATEST((1 - (embedding <=> %s::vector)), (1 - (insight_embedding <=> %s::vector))) 
-                * importance 
-                * exp(-%s * (EXTRACT(EPOCH FROM (%s::timestamp - last_accessed)) / 86400.0) / (2 + access_count)) DESC
+                FROM episodic_memory 
+                ORDER BY (GREATEST((1 - (embedding <=> %s::vector)), (1 - (insight_embedding <=> %s::vector))) * clarity) DESC
                 LIMIT %s
                 """,
                 (
@@ -196,8 +194,6 @@ class EpisodicMemory:
                     query_vector,
                     query_vector,
                     query_vector,
-                    settings.MEMORY_DECENT_FACTOR,
-                    time_now,
                     settings.RECALL_TOP_K,
                 ),
             )
@@ -227,13 +223,23 @@ class EpisodicMemory:
         with self.conn.cursor() as cur:
             cur.execute(
                 """
+                WITH keyword_matches AS (
+                    SELECT 
+                        id, content, insight, importance, confidence, access_count, last_accessed, metadata, clarity, time,
+                        (
+                            SELECT count(*) 
+                            FROM jsonb_array_elements_text((metadata->'keywords')::jsonb) as k 
+                            WHERE k = ANY(%s)
+                        ) as match_count
+                    FROM episodic_memory
+                    WHERE (metadata->'keywords')::jsonb ?| %s
+                )
                 SELECT id, content, insight, importance, confidence, access_count, last_accessed, metadata, clarity, time
-                FROM episodic_memory
-                WHERE (metadata->'keywords')::jsonb ?| %s
-                ORDER BY clarity DESC
+                FROM keyword_matches
+                ORDER BY match_count DESC, clarity DESC
                 LIMIT %s
                 """,
-                (keywords, settings.RECALL_TOP_K),
+                (keywords, keywords, settings.RECALL_TOP_K),
             )
             rows = cur.fetchall()
             memories = []
@@ -256,13 +262,13 @@ class EpisodicMemory:
         with self.conn.cursor() as cur:
             cur.execute("""
                 UPDATE episodic_memory
-                SET clarity = importance * exp(
-                        -%s * (EXTRACT(EPOCH FROM (%s::timestamp - last_accessed)) / 86400.0) / (2 + access_count)
+                SET clarity = clarity * exp(
+                        -%s / (1.0 + ln(1.0 + access_count))
                     )
-                    WHERE clarity > 0.01
-                """, (settings.MEMORY_DECENT_FACTOR, self.event_bus.formatted_logical_now))
+                WHERE clarity > 0.01
+                """, (settings.MEMORY_DECENT_FACTOR,))
             cur.execute(
-                "DELETE FROM episodic_memory WHERE clarity < 0.1 AND access_count < 5"
+                "DELETE FROM episodic_memory WHERE clarity < 0.05 AND access_count < 5"
             )
             self.conn.commit()
             logger.info("Memory cleanup (deleted low clarity memories) completed.")

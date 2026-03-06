@@ -2,6 +2,7 @@ import time
 import threading
 import logging
 import json
+import concurrent.futures
 from config.settings import settings
 from core.event_bus import EventBus, Event
 from brain.llm_client import LLMClient
@@ -54,4 +55,54 @@ class Hippocampus:
                 self.event_bus.publish(Event("memory.store", mem))
         except (TypeError, json.JSONDecodeError) as e:
             logger.error(f"Failed to decode LLM response during memory preprocessing: {e}. Raw response: {repr(resp)}")
+            
+            
+    def road_memory(self,content):
+        system_prompt=settings.CORE_PERSONA+settings.MEMORY_JUDGE_PROMPT
+        logger.info(f"Loading Memory\n")
+        user_prompt = f"提供的日志如下：\n\n{content}"
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        resp=self.llm_client.one_chat(
+            settings.SMALL_LLM,
+            messages=messages
+        )
+        key_words=[]
+        query=""
+        memories=None
+        try:
+            resp_json=json.loads(resp)
+            key_words=resp_json.get("keywords",[])
+            query=resp_json.get("query","")
+            data = {"query": query, "key_words": key_words}
+            memories=json.dumps(self._get_persistence_memory(data), ensure_ascii=False)
+            logger.info(f"Road Memory\nQuery: {query}\nKey Words: {key_words}\n")
+            
+        except (TypeError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to decode LLM response during memory loading: {e}. Raw response: {repr(resp)}")
+            
+        finally:
+            return memories
+    
+    def _get_persistence_memory(self, query_data):
+        future = concurrent.futures.Future()
 
+        def on_memory_retrieved(memories):
+            if not future.done():
+                logger.info(f"Retrieved relevant memories: {len(memories)} items")
+                future.set_result(memories)
+
+        query_data["callback"] = on_memory_retrieved
+        self.event_bus.publish(Event("memory.query", query_data))        
+        try:
+            return future.result(timeout=5)
+        except concurrent.futures.TimeoutError:
+            logger.error("查询持久化记忆超时，跳过查询以维持对话。")
+            return []
+        except Exception as e:
+            logger.error(f"查询持久化记忆时发生异常: {e}")
+            return []
+        
+        
