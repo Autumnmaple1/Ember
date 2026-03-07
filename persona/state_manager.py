@@ -161,10 +161,8 @@ class StateManager:
         
         history = self.short_term_memory.get_memory().get("history", [])
         
-        # 准备记忆检索上下文
         context_for_memory = f"时间: {logical_now_str}\n先前状态: {json.dumps(self.current_state, ensure_ascii=False)}\n对话历史: {json.dumps(history, ensure_ascii=False)}"
         
-        # 先检索记忆
         memories = self.hippocampus.road_memory(context_for_memory)
         
         prompt = self._apply_idle_template(settings.IDLE_STATE_UPDATE_PROMPT, info)

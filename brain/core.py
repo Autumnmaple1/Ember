@@ -93,7 +93,7 @@ class Brain:
                 logger.info(f"LLM回复: {full_content}")
                 self.memory.add_message("assistant", full_content)
                 self.event_bus.publish(
-                    Event(name="llm.finished", data={"full_text": full_content})
+                    Event(name="llm.finished", data={"text": full_content})
                 )
                 self.event_bus.publish(
                     Event(name="user_interaction", data=self.memory.get_memory())
