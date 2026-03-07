@@ -66,9 +66,9 @@
 
 ### 2. 项目配置
 
-1. **配置环境变量**: 复制 `env.example` 并改名为 `.env`。具体参数要求见 `.env.example`，建议使用相同的模型配置（注意：qwen 关闭推理的方式和 openai 不同），具体每一项代表了什么在 `.env.example` 中有说明。
-2. **书写人设**: 打开 `config/prompts.yaml`，修改 `core_persona` 项的内容为你喜欢的内容（最好别再改，没做多角色支持，要改要删记忆库，会串）。
-3. **设置初始场景**: 打开 `config/state_default.json`，根据字段要求和示例设置一个你喜欢的初见场景。
+1. **配置环境变量**: 复制 `.env.example` 并改名为 `.env`。具体参数要求见 `.env.example`，建议使用相同的模型配置（注意：qwen 关闭推理的方式和 openai 不同），具体每一项代表了什么在 `.env.example` 中有说明。
+2. **书写人设**: 打开 `config/prompts.yaml`，修改 `core_persona` 项的内容为你喜欢的内容（确定了以后最好别再改，没做多角色支持，要改要删记忆库，会串）。
+3. **设置初始场景**: 打开 `config/state_default.json`，根据字段要求和示例设置一个你喜欢的初见场景（命运的初见）。
 
 ### 3. 安装步骤
 
@@ -92,7 +92,7 @@ pip install -r requirements.txt
 # 进入前端目录
 cd frontend
 
-# 安装依赖 (将自动安装 recharts 等雷达图相关包)
+# 安装依赖
 npm install
 npm install recharts
 ```
