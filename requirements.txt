@@ -1,6 +1,9 @@
 openai
-dotenv
+python-dotenv
 pyyaml
-psycopg2
 numpy
 pgvector
+fastapi
+psycopg2-binary
+websockets 
+uvicorn[standard]

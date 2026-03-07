@@ -3,7 +3,10 @@ import dotenv
 from dataclasses import dataclass
 import yaml
 import time
+import logging
 import json
+
+logger = logging.getLogger(__name__)
 
 dotenv.load_dotenv()
 
@@ -43,7 +46,6 @@ class Settings:
     else:
         PROMPTS = {}
 
-    # 加载 STATE
     STATE = {}
     if os.path.exists("./config/state.json"):
         with open("./config/state.json", "r", encoding="utf-8") as f:
@@ -58,7 +60,10 @@ class Settings:
                 STATE = json.load(f)
             except json.JSONDecodeError:
                 STATE = {}
+                
+    logger.info(f"Loaded state: {STATE}")
 
+    CHARACTER_NAME=os.getenv("CHARACTER_NAME", "依鸣")
     CORE_PERSONA = PROMPTS.get("core_persona", "")
     SYSTEM_PROMPT = CORE_PERSONA+PROMPTS.get("system_prompt", "")
     STATE_UPDATE_PROMPT = PROMPTS.get("state_update_prompt", "")

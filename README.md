@@ -1,6 +1,7 @@
 # Ember: - 数字生命引擎
 
 名字起的不太好（
+
 不如直接叫依鸣（
 
 ## 🌟 项目简介
@@ -8,6 +9,9 @@
 **Ember** 是一个创新的数字生命模拟引擎。它不仅是一个基于大语言模型（LLM）的对话机器人，更是一个尝试赋予 AI **“连续意识”**、**“情感稳态”** 和 **“自主生存逻辑”** 的实验性框架。
 
 目前，它承载了一个名为 **“依鸣”** 的少女。她不仅是南大的一名大一新生，还是一个在数字世界里会疲惫、会期待、会有内心独白、会自发思考的活生生的个体。
+
+![Ember Web UI Preview](data/description.png)
+*(Web UI 交互演示)*
 
 ---
 
@@ -46,39 +50,86 @@
 
 ---
 
-## 🎨 角色：依鸣 (Yiming)
+## 🎨 默认角色：依鸣 (Yiming)
 
 - **身份**：南京大学匡亚明学院大一新生（计算机方向）。
 - **性格**：有些青涩、聊技术时逻辑严密、热爱算法与观鸟。
 
 ---
 
-## 📦 快速上手
+## 📦 快速上手 (Quick Start)
 
-### 环境要求
-- Python 3.9+
-- PostgreSQL (需安装 [pgvector](https://github.com/pgvector/pgvector) 插件)
+### 1. 环境准备
+- **Python 3.11** (推荐使用 Conda 管理环境)
+- **Node.js 18+** (前端运行环境)
+- **Docker Desktop** (用于启动 PostgreSQL + pgvector 数据库)
 
-### 安装步骤
+### 2. 项目配置
 
-1. **配置环境**：
-   - 拷贝 `.env.example` 为 `.env` 并填写你的 LLM API Key。
-   - 确保安装了 Python 3.9+。
+1. **配置环境变量**: 复制 `env.example` 并改名为 `.env`。具体参数要求见 `.env.example`，建议使用相同的模型配置（注意：qwen 关闭推理的方式和 openai 不同），具体每一项代表了什么在 `.env.example` 中有说明。
+2. **书写人设**: 打开 `config/prompts.yaml`，修改 `core_persona` 项的内容为你喜欢的内容（最好别再改，没做多角色支持，要改要删记忆库，会串）。
+3. **设置初始场景**: 打开 `config/state_default.json`，根据字段要求和示例设置一个你喜欢的初见场景。
 
-2. **启动数据库 (Docker)**：
-   项目依赖 PostgreSQL (pgvector)。即便在本地运行主程序，也推荐使用 Docker 快速启动数据库：
-   ```bash
-   docker-compose up -d
-   ```
+### 3. 安装步骤
 
-3. **安装依赖并运行**：
-   ```bash
-   # 安装项目依赖
-   pip install -r requirements.txt
+#### 第一步：创建并激活 Conda 环境
+```bash
+# 创建名为 Ember 的虚拟环境
+conda create -n Ember python=3.11
 
-   # 启动数字生命
-   python main.py
-   ```
+# 激活环境
+conda activate Ember
+```
+
+#### 第二步：安装后端依赖
+```bash
+pip install -r requirements.txt
+```
+
+#### 第三步：安装前端依赖
+前端需安装依赖以支持 Live2D 模型展示及状态雷达图 (`recharts`)。
+```bash
+# 进入前端目录
+cd frontend
+
+# 安装依赖 (将自动安装 recharts 等雷达图相关包)
+npm install
+npm install recharts
+```
+
+#### 第四步：启动数据库
+项目依赖 PostgreSQL (pgvector)。使用 Docker 快速启动：
+```bash
+# 回到项目根目录
+cd ..
+docker-compose up -d
+```
+
+### 4. 启动服务
+
+#### 方式一：Windows 一键启动 (推荐)
+在完成上述环境配置（Docker running, Conda activated）后，直接运行脚本：
+```bash
+run_all.bat
+```
+脚本将自动启动后端 API 和前端开发服务器。
+
+#### 方式二：手动分步启动
+
+**启动后端**
+```bash
+# 确保在 Ember 根目录且已激活 conda 环境
+python server.py
+# 后端将运行在 http://localhost:8000
+```
+*注：`python main.py` 是纯命令行交互版本，若仅需在终端测试对话，可只运行此文件。*
+
+**启动前端**
+```bash
+cd frontend
+npm run dev
+# 前端将运行在 http://localhost:5173
+```
 
 ---
 

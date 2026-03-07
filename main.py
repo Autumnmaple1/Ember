@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 import time
 import queue
 import threading
@@ -9,11 +11,12 @@ from brain.core import Brain
 from memory.short_term import ShortTermMemory
 from config.settings import settings
 import config.logging_config
-import logging
+from memory.db_memory import DBMemory
+
 from memory.episodic_memory import EpisodicMemory
 from memory.memory_process import Hippocampus
 
-logger = logging.getLogger(__name__)
+
 
 
 input_queue = queue.Queue()
@@ -42,6 +45,7 @@ def main():
     hippocampus = Hippocampus(event_bus)
     state_manager = StateManager(event_bus, hippocampus,memory)
     brain = Brain(event_bus, state_manager, memory,hippocampus)
+    db_memory = DBMemory(event_bus)
 
     heartbeat.start()
 

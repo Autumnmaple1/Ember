@@ -44,7 +44,7 @@ chroma_db/
 # =========================
 config/chat_history.log
 config/chat_memory.json
-
+config/state.json
 
 # =========================
 # IDE & 擝作系统酝置
