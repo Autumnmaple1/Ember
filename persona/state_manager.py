@@ -15,7 +15,12 @@ logger = logging.getLogger(__name__)
 
 class StateManager:
 
-    def __init__(self, event_bus: EventBus,hippocampus: Hippocampus,short_term_memory: ShortTermMemory):
+    def __init__(
+        self,
+        event_bus: EventBus,
+        hippocampus: Hippocampus,
+        short_term_memory: ShortTermMemory,
+    ):
         self.event_bus = event_bus
         self.hippocampus = hippocampus
         self.short_term_memory = short_term_memory
@@ -91,18 +96,16 @@ class StateManager:
             with open(filename, "a", encoding="utf-8", buffering=1) as f:
                 f.write(content + "\n")
 
-        threading.Thread(target=_log,daemon=True).start()
+        threading.Thread(target=_log, daemon=True).start()
 
     def _update_state(self, new_state, logical_now=None):
         self._async_log(
             "./config/chat_history.log",
             f"{{状态更新: {json.dumps(new_state, ensure_ascii=False)}}}",
         )
-        
-        self.event_bus.publish(
-            Event("state.update", data={"new_state": new_state})
-        )
-        
+
+        self.event_bus.publish(Event("state.update", data={"new_state": new_state}))
+
         with open("./config/state.json", "w", encoding="utf-8") as f:
             json.dump(new_state, f, ensure_ascii=False, indent=2)
         self.current_state.update(new_state)
@@ -129,11 +132,11 @@ class StateManager:
         logical_now = self._get_logical_now()
         logical_now_str = self._format_logical_time(logical_now)
         logger.info(f"[{logical_now_str}] 收到用户交互事件，准备更新状态...")
-        
+
         context_for_memory = f"时间: {logical_now_str}\n先前状态: {json.dumps(self.current_state, ensure_ascii=False)}\n对话历史: {json.dumps(history, ensure_ascii=False)}"
-        
+
         memories = self.hippocampus.road_memory(context_for_memory)
-        
+
         prompt = f"当前的准确时间: {logical_now_str}\n\n[先前状态]\n{json.dumps(self.current_state, ensure_ascii=False)}\n\n[可能相关的记忆]:\n{memories if memories else '[]'}\n\n[近期对话记录]:\n{json.dumps(history, ensure_ascii=False)}\n\n{settings.STATE_UPDATE_PROMPT}"
 
         try:
@@ -158,17 +161,20 @@ class StateManager:
         logger.info(f"[{logical_now_str}] 收到闲置事件，准备更新状态...")
 
         info = self._get_idle_info(logical_now)
-        
+
         history = self.short_term_memory.get_memory().get("history", [])
-        
+
         context_for_memory = f"时间: {logical_now_str}\n先前状态: {json.dumps(self.current_state, ensure_ascii=False)}\n对话历史: {json.dumps(history, ensure_ascii=False)}"
-        
+
         memories = self.hippocampus.road_memory(context_for_memory)
-        
+
         prompt = self._apply_idle_template(settings.IDLE_STATE_UPDATE_PROMPT, info)
-        
+
         if memories:
-            prompt = f"[可能相关的记忆]:\n{memories}\n\n[近期对话记录]:\n{json.dumps(history, ensure_ascii=False)}\n\n" + prompt
+            prompt = (
+                f"[可能相关的记忆]:\n{memories}\n\n[近期对话记录]:\n{json.dumps(history, ensure_ascii=False)}\n\n"
+                + prompt
+            )
 
         try:
             response = self._ask_llm(settings.CORE_PERSONA, prompt)
@@ -189,7 +195,7 @@ class StateManager:
                             data={},
                         )
                     )
-                    
+
                 if impulse.get("is_sleeping", False) and not self.is_sleeping:
                     self.is_sleeping = True
                     self.event_bus.publish(
@@ -198,7 +204,7 @@ class StateManager:
                             data={},
                         )
                     )
-                
+
                 if not impulse.get("is_sleeping", False):
                     self.is_sleeping = False
 

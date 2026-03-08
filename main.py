@@ -1,4 +1,5 @@
 import logging
+
 logger = logging.getLogger(__name__)
 import time
 import queue
@@ -15,8 +16,6 @@ from memory.db_memory import DBMemory
 
 from memory.episodic_memory import EpisodicMemory
 from memory.memory_process import Hippocampus
-
-
 
 
 input_queue = queue.Queue()
@@ -40,11 +39,11 @@ def main():
         base_prompt=settings.SYSTEM_PROMPT,
         max_memory_size=settings.CONTEXT_WINDOW_SIZE,
     )
-    
+
     episodic_memory = EpisodicMemory(event_bus)
     hippocampus = Hippocampus(event_bus)
-    state_manager = StateManager(event_bus, hippocampus,memory)
-    brain = Brain(event_bus, state_manager, memory,hippocampus)
+    state_manager = StateManager(event_bus, hippocampus, memory)
+    brain = Brain(event_bus, state_manager, memory, hippocampus)
     db_memory = DBMemory(event_bus)
 
     heartbeat.start()
