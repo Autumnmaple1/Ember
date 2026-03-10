@@ -975,16 +975,37 @@ button:hover {
   animation: pulse-red 1.5s infinite;
 }
 
-@keyframes pulse-red {
-  0% {
-    box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.4);
-  }
+/* 播放按钮样式 */
+.play-voice-btn {
+  align-self: flex-end;
+  background: rgba(24, 144, 255, 0.1);
+  border: none;
+  border-radius: 4px;
+  color: #1890ff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 4px;
+  padding: 4px;
+  transition: all 0.2s;
+  opacity: 0.6;
+}
 
-  70% {
-    box-shadow: 0 0 0 10px rgba(255, 77, 79, 0);
-  }
+.play-voice-btn:hover {
+  background: rgba(24, 144, 255, 0.2);
+  opacity: 1;
+  transform: scale(1.1);
+}
 
-  100% {
-    box-shadow: 0 0 0 0 rgba(255, 77, 79, 0);
-  }
+/* 自动播放开关激活状态 */
+.autoplay-toggle.active {
+  background: #52c41a;
+  color: white;
+  border-color: #52c41a;
+  box-shadow: 0 4px 12px rgba(82, 196, 26, 0.3);
+}
+
+.autoplay-toggle.active:hover {
+  background: #73d13d;
 }

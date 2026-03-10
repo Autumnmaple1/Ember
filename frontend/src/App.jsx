@@ -22,6 +22,14 @@ function App() {
   const [isResizing, setIsResizing] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [activeTab, setActiveTab] = useState("chat");
+  const [autoPlay, setAutoPlay] = useState(() => {
+    const saved = localStorage.getItem('autoPlay');
+    return saved !== null ? JSON.parse(saved) : true;
+  });
+
+  useEffect(() => {
+    localStorage.setItem('autoPlay', JSON.stringify(autoPlay));
+  }, [autoPlay]);
 
   // 轮询 EventBus 逻辑时间
   useEffect(() => {
@@ -107,6 +115,7 @@ function App() {
   const audioQueue = useRef({}); // 改为对象以存储 index -> data
   const nextPlayIndex = useRef(0);
   const isPlaying = useRef(false);
+  const audioRef = useRef(null); // 使用 Ref 锁定音频对象
 
   // 获取后端角色配置
   useEffect(() => {
@@ -252,6 +261,15 @@ function App() {
     }
   };
 
+  const requestTTS = (text) => {
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({
+        type: "tts_request",
+        content: text
+      }));
+    }
+  };
+
   useEffect(() => {
     // 延迟连接以避开 React Strict Mode 的重复初始化干扰
     const connectWS = () => {
@@ -269,6 +287,7 @@ function App() {
           console.log("收到 WebSocket 数据对象:", data);
 
           if (data.type === 'message') {
+            // ... (保持不变)
             const messageId = data.id || Date.now();
             setMessages(prev => {
               const mappedRole = (data.sender === 'ai' || data.sender === 'assistant' || data.sender === 'bot') ? 'ai' : 'user';
@@ -337,24 +356,14 @@ function App() {
               const emotion = data.live2d_emotion.toLowerCase();
               setCurrentEmotion(emotion);
             }
-
-            // 如果收到的是非 append 模式的最终消息，或者检测到输出结束标识（如果有的话）
-            // 这里为了通用性，在每次收到非 thought 内容更新时也可以重置计时
           }
           else if (data.type === 'llm.done') {
             console.log("收到 llm.done, 准备倒计时隐藏想法窗");
-            // 当 AI 彻底说话结束，且当前存在想法内容时，启动消失倒计时
             if (thoughtTimerRef.current) clearTimeout(thoughtTimerRef.current);
-
-            // 注意：这里不要判断 if (showThought)，因为状态更新是异步的，
-            // 直接设置定时器，确保在 4 秒后执行 setShowThought(false)
             thoughtTimerRef.current = setTimeout(() => {
-              console.log("执行隐藏想法窗动作");
               setShowThought(false);
-              // 彻底消失后清空文字内容，避免下次对话时瞬间闪现旧内容
               setTimeout(() => {
                 setCurrentThought("");
-                console.log("已彻底清空想法文字");
               }, 1500);
             }, 4000);
           }
@@ -362,8 +371,25 @@ function App() {
             audioQueue.current[data.index] = data;
             playNextAudio();
           }
+          else if (data.type === 'audio') {
+            console.log("收到 Base64 语音数据");
+            const audioData = `data:audio/mp3;base64,${data.audio_base64}`;
+            const audio = new Audio(audioData);
+            audio.volume = 1.0;
+            
+            // 只有开启自动播放或者是手动触发时才播放
+            // 注意：手动触发也会收到广播，所以我们需要一种方式区分。
+            // 简单处理：如果是自动播放模式，或者用户刚才点击了手动播放（当前 currentAudio 为空时）
+            if (autoPlay || !isPlaying.current) {
+               audio.play()
+                .then(() => console.log("音频播放成功"))
+                .catch(err => console.error("播放被拦截:", err));
+            }
+            
+            setCurrentAudio(audio);
+            audio.onended = () => setCurrentAudio(null);
+          }
           else if (data.type === 'state_update') {
-            console.log("更新实时状态:", data.state);
             setCurrentState(data.state);
           }
         } catch (err) {
@@ -656,6 +682,22 @@ function App() {
                           style={showLogs ? { fontSize: '12px', color: '#666', fontFamily: 'monospace' } : {}}
                         >
                           <div className="message-content">{msg.content}</div>
+                          {msg.role === 'ai' && !showLogs && msg.content && (
+                            <button 
+                              type="button"
+                              className="play-voice-btn" 
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                requestTTS(msg.content);
+                              }}
+                              title="播放语音"
+                            >
+                              <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                                <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+                              </svg>
+                            </button>
+                          )}
                         </div>
                       </div>
                       {msg.role === 'user' && !showLogs && (
@@ -709,6 +751,20 @@ function App() {
               <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
             </svg>
             <span className="btn-label">禁用</span>
+          </button>
+          <button
+            className={`action-btn autoplay-toggle ${autoPlay ? 'active' : ''}`}
+            onClick={() => setAutoPlay(!autoPlay)}
+            title={autoPlay ? "关闭自动播放" : "开启自动播放"}
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+              {autoPlay ? (
+                <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+              ) : (
+                <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>
+              )}
+            </svg>
+            <span className="btn-label">{autoPlay ? "语音开" : "语音关"}</span>
           </button>
           <button className="action-btn send-btn primary" onClick={handleSend} title={"单击或enter发送消息"}>
             <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">

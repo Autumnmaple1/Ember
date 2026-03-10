@@ -2,12 +2,15 @@ import json
 import asyncio
 import time
 import logging
+import os
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from core.event_bus import EventBus, Event
 from core.heartbeat import Heartbeat
 from persona.state_manager import StateManager
 from brain.core import Brain
+from brain.tts import TTSManager
 from memory.short_term import ShortTermMemory
 from config.settings import settings
 from memory.episodic_memory import EpisodicMemory
@@ -55,6 +58,7 @@ class EmberServer:
         self.manager = ConnectionManager()
         self.loop = None
         self.current_ai_msg_id = None # Track ongoing AI message ID
+        self.current_full_text = "" # Track full text for TTS
         
         # Initialize components
         self.heartbeat = Heartbeat(self.event_bus, interval=settings.HEARTBEAT_INTERVAL)
@@ -64,6 +68,7 @@ class EmberServer:
         self.db_memory = DBMemory(self.event_bus)
         self.state_manager = StateManager(self.event_bus, self.hippocampus, self.memory)
         self.brain = Brain(self.event_bus, self.state_manager, self.memory, self.hippocampus)
+        self.tts_manager = TTSManager(voice="zh-CN-XiaoxiaoNeural")
 
         self._setup_middleware()
         self._setup_routes()
@@ -82,6 +87,12 @@ class EmberServer:
         @self.app.on_event("startup")
         async def startup_event():
             self.loop = asyncio.get_running_loop()
+            logger.info(f">>> [DEBUG] Asyncio loop initialized: {self.loop}")
+
+        # Mount audio directory
+        audio_dir = "data/audio"
+        os.makedirs(audio_dir, exist_ok=True)
+        self.app.mount("/audio", StaticFiles(directory=audio_dir), name="audio")
 
         @self.app.get("/config")
         async def get_config():
@@ -107,8 +118,17 @@ class EmberServer:
                 while True:
                     data = await websocket.receive_text()
                     message = json.loads(data)
-                    user_input = message.get("content")
+                    msg_type = message.get("type")
                     
+                    # 严格拦截 TTS 请求，防止进入消息广播逻辑
+                    if msg_type == "tts_request":
+                        text = message.get("content")
+                        if text:
+                            logger.info(f"收到手动 TTS 请求: {text[:20]}...")
+                            asyncio.create_task(self._process_tts(text))
+                        continue # 必须 continue，跳过下方的 user_input 处理
+
+                    user_input = message.get("content")
                     if user_input:
                         ts = int(self.event_bus.logical_now * 1000)
                         await self.manager.broadcast({
@@ -128,16 +148,14 @@ class EmberServer:
     def _setup_event_handlers(self):
         self.event_bus.subscribe("llm.started", self._on_ai_start_internal)
         self.event_bus.subscribe("llm.chunk", self._on_ai_chunk_internal)
-        self.event_bus.subscribe("llm.finished", lambda e: self.safe_broadcast({
-            "type": "llm.done"
-        }))
+        self.event_bus.subscribe("llm.finished", self._on_ai_finished_internal)
         self.event_bus.subscribe("state.update", lambda e: self.safe_broadcast({
             "type": "state_update", "state": e.data.get("new_state", {})
         }))
 
     def _on_ai_start_internal(self, event):
-        # 使用 EventBus 提供的逻辑时间，确保与系统整体步调一致
         self.current_ai_msg_id = int(self.event_bus.logical_now * 1000)
+        self.current_full_text = ""
         self.safe_broadcast({
             "type": "message", 
             "sender": "ai", 
@@ -149,13 +167,39 @@ class EmberServer:
 
     def _on_ai_chunk_internal(self, event):
         if self.current_ai_msg_id:
+            chunk = event.data.get("text", "")
+            self.current_full_text += chunk
             self.safe_broadcast({
                 "type": "message", 
                 "sender": "ai", 
-                "content": event.data.get("text", ""), 
+                "content": chunk, 
                 "mode": "append",
                 "id": self.current_ai_msg_id
             })
+
+    def _on_ai_finished_internal(self, event):
+        logger.info(f"LLM 完成输出，准备合成 TTS... (内容长度: {len(self.current_full_text)})")
+        if self.current_full_text and self.current_full_text.strip():
+            # 只有开启了某种自动逻辑或当前处于 AI 回复流中才自动合成
+            if self.loop:
+                self.loop.call_soon_threadsafe(
+                    lambda: asyncio.create_task(self._process_tts(self.current_full_text))
+                )
+        
+        self.safe_broadcast({
+            "type": "llm.done"
+        })
+
+    async def _process_tts(self, text):
+        try:
+            base64_audio = await self.tts_manager.generate_base64(text)
+            logger.info(f"广播 Base64 TTS 音频 (长度: {len(base64_audio)})")
+            await self.manager.broadcast({
+                "type": "audio",
+                "audio_base64": base64_audio
+            })
+        except Exception as e:
+            logger.error(f"TTS 广播错误: {e}")
 
     def safe_broadcast(self, message: dict):
         if self.loop and self.loop.is_running():

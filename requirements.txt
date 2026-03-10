@@ -1,9 +1,10 @@
-openai
+fastapi
+uvicorn[standard]
 python-dotenv
+openai
+aiohttp
 pyyaml
+psycopg2-binary
 numpy
 pgvector
-fastapi
-psycopg2-binary
-websockets 
-uvicorn[standard]
+edge-tts>=7.2.7
