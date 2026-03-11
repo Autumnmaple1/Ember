@@ -36,9 +36,7 @@ class Brain:
         thread.start()
 
     def _on_idle_speak(self, event: Event):
-        dynamic_prompt = (
-            settings.SYSTEM_PROMPT + self.state_manager.speaking_prompt_injection
-        )
+        dynamic_prompt = settings.SYSTEM_PROMPT
 
         self.memory.update_base_prompt(dynamic_prompt)
 
@@ -55,7 +53,7 @@ class Brain:
         memories = json.dumps(
             self.hippocampus.road_memory(messages), ensure_ascii=False
         )
-        dynamic_prompt = settings.SYSTEM_PROMPT + self.state_manager.prompt_injection
+        dynamic_prompt = settings.SYSTEM_PROMPT
         if memories:
             dynamic_prompt += f"\n\n[脑海闪现的记忆]：{memories}"
 
@@ -74,14 +72,18 @@ class Brain:
             if pack:
                 formatted_history = ""
                 for msg in history:
-                    role_label = "用户" if msg["role"] == "user" else "你"
+                    role_label = (
+                        "对方"
+                        if msg["role"] == "user"
+                        else f"{settings.CHARACTER_NAME}"
+                    )
                     formatted_history += f"{role_label}: {msg['content']}\n"
 
                 messages = [
                     {"role": "system", "content": system_prompt},
                     {
                         "role": "user",
-                        "content": f"以下是对话历史：\n{formatted_history}\n请参考并结合意图生成回复",
+                        "content": f"以下是对话历史：\n{formatted_history}\n{self.state_manager.prompt_injection}请参考并结合状态生成回复",
                     },
                 ]
             else:

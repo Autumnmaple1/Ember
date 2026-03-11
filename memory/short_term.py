@@ -65,7 +65,7 @@ class ShortTermMemory:
         threading.Thread(target=_log, daemon=True).start()
 
     def add_message(self, role, content):
-        content = separate_thought_and_speech(content)[1]
+        # content = separate_thought_and_speech(content)[1]
         self.async_log("./config/chat_history.log", f"{role}: {content}")
         self._add_back(role, content)
         self._save_memory()

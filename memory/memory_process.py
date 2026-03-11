@@ -75,21 +75,25 @@ class Hippocampus:
         key_words = []
         query = ""
         memories = None
+        resp_json = self.llm_client._extract_json(resp)
+        if resp_json is None:
+            raise json.JSONDecodeError("Failed to extract JSON", resp, 0)
+
+        if resp_json["need_memory"] is False:
+            logger.info("LLM judged that no memory retrieval is needed.")
+            return []
         try:
-            resp_json = self.llm_client._extract_json(resp)
-            if resp_json is None:
-                raise json.JSONDecodeError("Failed to extract JSON", resp, 0)
 
             key_words = resp_json.get("keywords", [])
             query = resp_json.get("query", "")
             data = {"query": query, "key_words": key_words}
-            memories = json.dumps(
-                self._get_persistence_memory(data), ensure_ascii=False
-            )
+            raw_memories = self._get_persistence_memory(data)
+            simplified_memories = self._simplify_memories(raw_memories)
+            memories = json.dumps(simplified_memories, ensure_ascii=False)
             logger.info(f"Road Memory\nQuery: {query}\nKey Words: {key_words}\n")
-            for mem in json.loads(memories):
+            for mem in simplified_memories:
                 logger.info(
-                    f"Retrieved memory: {mem['content'][:50]}... (ID: {mem['id']})"
+                    f"Retrieved memory: {mem['content'][:50]}... (time: {mem.get('time', 'N/A')})"
                 )
 
         except (TypeError, json.JSONDecodeError) as e:
@@ -99,6 +103,15 @@ class Hippocampus:
 
         finally:
             return memories
+
+    def _simplify_memories(self, memories):
+        """精简记忆，只保留 content 和 time 字段以减少 token 消耗"""
+        simplified = []
+        for mem in memories:
+            simplified.append(
+                {"content": mem.get("content", ""), "time": mem.get("time", "")}
+            )
+        return simplified
 
     def _get_persistence_memory(self, query_data):
         future = concurrent.futures.Future()

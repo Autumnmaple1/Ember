@@ -7,4 +7,6 @@ pyyaml
 psycopg2-binary
 numpy
 pgvector
+json_repair
 edge-tts>=7.2.7
+neo4j==5.20.0

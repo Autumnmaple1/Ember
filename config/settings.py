@@ -94,6 +94,12 @@ class Settings:
     PG_PASSWORD = os.getenv("PG_PASSWORD", "your_password")
     PG_DB = os.getenv("PG_DB", "ember_db")
 
+    NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+    NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+    NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "your_password")
+    NEO4J_DB = os.getenv("NEO4J_DB", "neo4j")
+    ENABLE_NEO4J = os.getenv("ENABLE_NEO4J", "True").lower() == "true"
+
     MEMORY_JUDGE_PROMPT = PROMPTS.get("memory_judge_prompt", "")
     MEMORY_ENCODING_PROMPT = PROMPTS.get("memory_encoding_prompt", "")
     MEMORY_DECENT_FACTOR = float(os.getenv("MEMORY_DECENT_FACTOR", "0.5"))

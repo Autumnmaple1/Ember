@@ -11,3 +11,23 @@ services:
     volumes:
       - ./data/db/postgres_data:/var/lib/postgresql/data
     restart: always
+    networks:
+      - ember-network
+
+  neo4j:
+    image: neo4j:latest
+    container_name: ember-neo4j
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/your_password
+    volumes:
+      - ./data/db/neo4j_data:/data
+    restart: always
+    networks:
+      - ember-network
+
+networks:
+  ember-network:
+    driver: bridge
