@@ -204,7 +204,7 @@ class StateManager:
                     self.is_sleeping = True
                     self.event_bus.publish(
                         Event(
-                            name="sleep",
+                            name="memory.sleep",
                             data={},
                         )
                     )

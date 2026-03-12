@@ -105,11 +105,14 @@ class Hippocampus:
             return memories
 
     def _simplify_memories(self, memories):
-        """精简记忆，只保留 content 和 time 字段以减少 token 消耗"""
         simplified = []
         for mem in memories:
             simplified.append(
-                {"content": mem.get("content", ""), "time": mem.get("time", "")}
+                {
+                    "content": mem.get("content", ""),
+                    "insight": mem.get("insight", ""),
+                    "time": mem.get("time", ""),
+                }
             )
         return simplified
 

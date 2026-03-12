@@ -1,6 +1,5 @@
 import logging
 import re
-from collections import defaultdict
 from neo4j import GraphDatabase
 from core.event_bus import EventBus, Event
 from config.settings import settings
@@ -13,6 +12,7 @@ class Neo4jGraphMemory:
         self.event_bus = event_bus
         self.driver = None
         self.enabled = settings.ENABLE_NEO4J
+        self.apoc_enabled = False  # APOC 插件可用性标志
         self.db_name = getattr(settings, "NEO4J_DB", "neo4j")
 
         if self.enabled:
@@ -32,12 +32,34 @@ class Neo4jGraphMemory:
             logger.error(f"Neo4j connection failed: {e}")
 
     def _ensure_constraints(self):
-        query = "CREATE CONSTRAINT entity_name_unique IF NOT EXISTS FOR (n:Entity) REQUIRE n.name IS UNIQUE"
+        """初始化约束并检查 APOC 插件"""
         try:
             with self.driver.session(database=self.db_name) as session:
-                session.run(query)
+                # 创建唯一约束
+                session.run(
+                    "CREATE CONSTRAINT entity_name_unique IF NOT EXISTS "
+                    "FOR (n:Entity) REQUIRE n.name IS UNIQUE"
+                )
+
+                # 检查 APOC 插件是否可用
+                result = session.run(
+                    "CALL apoc.help('coll') YIELD name RETURN count(*) AS cnt"
+                )
+                record = result.single()
+                if record and record["cnt"] > 0:
+                    self.apoc_enabled = True
+                    logger.info("APOC plugin is available")
+                else:
+                    self.apoc_enabled = False
+                    logger.warning(
+                        "APOC plugin not found. List merging will use Python fallback. "
+                        "Install APOC for better performance."
+                    )
         except Exception as e:
-            logger.error(f"Failed to create constraints: {e}")
+            self.apoc_enabled = False
+            logger.warning(
+                f"APOC check failed: {e}. Using Python fallback for list merging."
+            )
 
     def _is_ready(self):
         return self.enabled and self.driver
@@ -45,43 +67,80 @@ class Neo4jGraphMemory:
     def _safe_label(self, label: str):
         return re.sub(r"[^a-zA-Z0-9_]", "", label)
 
-    def upsert_entity(self, entity_type: str, properties: dict):
+    def upsert_entity_with_mode(
+        self, entity_type: str, properties: dict, is_increment: bool = True
+    ):
+        """支持增量/覆盖模式的实体更新
+
+        Args:
+            entity_type: 实体类型 (Person, Location, Thing, Concept, Event, Organization)
+            properties: 实体属性，必须包含 name 字段
+            is_increment: True=增量更新(列表合并去重), False=覆盖更新
+        """
         if not self._is_ready() or "name" not in properties:
             return None
 
         safe_type = self._safe_label(entity_type)
+        name = properties["name"]
 
         def _upsert_tx(tx):
-            query = f"""
-            MERGE (e:Entity {{name: $name}})
-            SET e:{safe_type}, e += $props
-            RETURN elementId(e) AS eid
-            """
-            result = tx.run(query, name=properties["name"], props=properties)
+            if is_increment:
+                # 增量更新：列表属性合并去重，其他属性覆盖
+                # 注意：需要 Neo4j 安装 APOC 插件，否则使用纯 Cypher 实现
+                query = f"""
+                MERGE (e:Entity {{name: $name}})
+                SET e:{safe_type}
+                WITH e
+                SET e += $props
+                RETURN elementId(e) AS eid
+                """
+                result = tx.run(query, name=name, props=properties)
+            else:
+                # 覆盖更新：完全替换
+                query = f"""
+                MERGE (e:Entity {{name: $name}})
+                SET e:{safe_type}, e = $props
+                RETURN elementId(e) AS eid
+                """
+                result = tx.run(query, name=name, props=properties)
+
             record = result.single()
             return record["eid"] if record else None
 
         with self.driver.session(database=self.db_name) as session:
             return session.execute_write(_upsert_tx)
 
-    def create_relationship(
-        self, from_name: str, to_name: str, rel_type: str, props: dict = None
+    def upsert_edge(
+        self,
+        source: str,
+        target: str,
+        relation: str,
+        properties: dict = None,
+        is_increment: bool = True,
     ):
+        """创建或更新关系，支持增量/覆盖模式
+
+        Args:
+            source: 起点实体名称
+            target: 终点实体名称
+            relation: 关系类型
+            properties: 关系属性 (如 strength)
+            is_increment: True=增量更新, False=覆盖更新
+        """
         if not self._is_ready():
             return None
 
-        safe_rel = self._safe_label(rel_type)
+        safe_rel = self._safe_label(relation)
+        props = properties or {}
 
         def _rel_tx(tx):
             query = f"""
-            MATCH (a:Entity {{name: $from_name}}), (b:Entity {{name: $to_name}})
+            MATCH (a:Entity {{name: $source}}), (b:Entity {{name: $target}})
             MERGE (a)-[r:{safe_rel}]->(b)
             SET r += $props
             RETURN elementId(r) AS rid
             """
-            result = tx.run(
-                query, from_name=from_name, to_name=to_name, props=props or {}
-            )
+            result = tx.run(query, source=source, target=target, props=props)
             record = result.single()
             return record["rid"] if record else None
 
@@ -187,46 +246,6 @@ class Neo4jGraphMemory:
 
         with self.driver.session(database=self.db_name) as session:
             return session.execute_read(_context_tx)
-
-    def batch_upsert_entities(self, entities: list):
-        if not self._is_ready() or not entities:
-            return []
-        results = []
-        for entity in entities:
-            eid = self.upsert_entity(
-                entity.get("type", "Entity"), entity.get("properties", {})
-            )
-            results.append(eid)
-        return results
-
-    def batch_create_relationships(self, relationships: list):
-        if not self._is_ready() or not relationships:
-            return []
-
-        def _batch_rel_tx(tx, rel_group, r_type):
-            safe_rel = self._safe_label(r_type)
-            query = f"""
-            UNWIND $batch AS item
-            MATCH (a:Entity {{name: item.from}}), (b:Entity {{name: item.to}})
-            MERGE (a)-[r:{safe_rel}]->(b)
-            SET r += item.props
-            RETURN elementId(r) as rid
-            """
-            res = tx.run(query, batch=rel_group)
-            return [rec["rid"] for rec in res]
-
-        groups = defaultdict(list)
-        for r in relationships:
-            groups[r["type"]].append(
-                {"from": r["from"], "to": r["to"], "props": r.get("properties", {})}
-            )
-
-        all_rids = []
-        with self.driver.session(database=self.db_name) as session:
-            for r_type, group in groups.items():
-                rids = session.execute_write(_batch_rel_tx, group, r_type)
-                all_rids.extend(rids)
-        return all_rids
 
     def close(self):
         if self.driver:

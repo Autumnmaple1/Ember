@@ -32,7 +32,6 @@ class EpisodicMemory:
         self.event_bus.subscribe("memory.store", self._on_store_request)
         self.event_bus.subscribe("memory.query", self._on_query_request)
         self.event_bus.subscribe("memory.sleep", self._sleep_memory_process)
-        self.event_bus.subscribe("sleep", self._sleep_memory_process)
 
     def _ensure_connection(self):
         try:
@@ -165,7 +164,6 @@ class EpisodicMemory:
         if "callback" in event.data:
             event.data["callback"](combined_memories)
 
-        # 异步更新访问计数，丢入 Queue
         for m_id in seen_ids:
             self.store_queue.put({"type": "update_access", "id": m_id})
 
