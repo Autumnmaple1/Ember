@@ -122,10 +122,7 @@ class Hippocampus:
             logger.info(
                 f"Road Memory\nQuery: {query}\nKey Words: {key_words}\nEntities: {entities}\n"
             )
-            for mem in simplified_memories:
-                logger.info(
-                    f"Retrieved memory: {mem['content'][:50]}... (time: {mem.get('time', 'N/A')})"
-                )
+            logger.info(f"Retrieved memory: {len(simplified_memories)} items")
             if graph_context["entities"]:
                 logger.info(
                     f"Graph entities: {[e.get('name') for e in graph_context['entities']]}"

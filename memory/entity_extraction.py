@@ -97,6 +97,7 @@ class EntityExtractionMemory:
             for i in range(0, len(memories), BATCH_SIZE):
                 batch = memories[i : i + BATCH_SIZE]
                 batch_count += 1
+                batch_ids = [m["id"] for m in batch]  # 收集本批次的记忆 ID
 
                 # 构建摘要文本
                 summaries = self._build_summaries(batch)
@@ -105,6 +106,9 @@ class EntityExtractionMemory:
                 result = self._extract_and_store(summaries)
                 total_nodes += result["nodes"]
                 total_edges += result["edges"]
+
+                # 标记本批次记忆为已整理
+                self._mark_memories_consolidated(batch_ids)
 
                 logger.info(
                     f"批次 {batch_count} 完成: {result['nodes']} 节点, {result['edges']} 边"
@@ -252,7 +256,10 @@ class EntityExtractionMemory:
 
         except json.JSONDecodeError as e:
             logger.error(f"JSON 解析失败: {e}")
-            logger.debug(f"原始响应: {response}")
+            logger.error(f"原始响应前500字符: {response[:500] if response else 'None'}")
+            logger.error(
+                f"错误位置附近内容: {response[max(0, e.pos-100):e.pos+100] if response and e.pos else 'N/A'}"
+            )
             return []
         except Exception as e:
             logger.error(f"LLM 调用失败: {e}")
@@ -289,6 +296,28 @@ class EntityExtractionMemory:
         except Exception as e:
             logger.error(f"节点处理失败: {e}")
             return False
+
+    def _mark_memories_consolidated(self, memory_ids: list):
+        """标记记忆为已整理（is_consolidated=1）"""
+        if not memory_ids:
+            return
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE episodic_memory
+                    SET is_consolidated = 1
+                    WHERE id = ANY(%s)
+                    """,
+                    (memory_ids,),
+                )
+                self.conn.commit()
+                logger.debug(f"已标记 {len(memory_ids)} 条记忆为已整理")
+        except Exception as e:
+            logger.error(f"标记记忆状态失败: {e}")
+            if self.conn:
+                self.conn.rollback()
 
     def _process_edge(self, item: dict) -> bool:
         """处理关系操作"""

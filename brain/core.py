@@ -8,6 +8,7 @@ import logging
 import concurrent.futures
 from memory.memory_process import Hippocampus
 import json
+from brain.tag_utils import validate_and_fix_llm_output
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,8 @@ class Brain:
                 self.event_bus.publish(Event(name="llm.chunk", data={"text": chunk}))
 
             if full_content:
+                # 修复可能不完整的标签
+                full_content = validate_and_fix_llm_output(full_content)
                 logger.info(f"LLM回复: {full_content}")
                 self.memory.add_message("assistant", full_content)
                 self.event_bus.publish(

@@ -2,20 +2,15 @@ import json
 import threading
 import os
 import re
+from brain.tag_utils import extract_thought_and_speech
 
 
 def separate_thought_and_speech(text):
-    thought_match = re.search(r"<thought>([\s\S]*?)</thought>", text)
-    thought = thought_match.group(1).strip() if thought_match else ""
-
-    if "</thought>" in text:
-        speech_match = re.search(r"[\s\S]*</thought>\s*([\s\S]*)", text)
-        speech = speech_match.group(1).strip() if speech_match else ""
-    else:
-        speech = re.sub(r"<thought>[\s\S]*", "", text).strip()
-        if not speech:
-            speech = text.strip()
-
+    """分离 thought 和 speech（使用增强的容错处理）"""
+    thought, speech = extract_thought_and_speech(text)
+    # 如果没有提取到 speech，返回原始文本
+    if not speech:
+        speech = text.strip()
     return thought, speech
 
 

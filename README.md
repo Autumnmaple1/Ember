@@ -34,6 +34,15 @@
 ### 4. 💭 要多想
 通过约束角色的 `<thought>` 标签，系统强制 LLM 在输出前进行“社交距离校验”与“意图推演”。可能没啥用，但可以看少女内心活动挺好玩的
 
+### 5. 🎙️ TTS 语音合成
+- **语音输出**：集成 Edge-TTS，支持将 AI 回复转换为自然语音。
+- **实时播放**：前端支持自动或手动触发语音播放，让对话更具沉浸感。
+- **可配置语音**：默认使用 `zh-CN-XiaoxiaoNeural`，可在代码中更换其他语音模型。
+
+### 6. 🎭 Live2D 虚拟形象
+- **动态表现**：前端集成 Live2D 模型，让角色拥有生动的表情与动作。
+- **情感联动**：计划中，会根据 PAD 情感状态调整形象表现。
+
 ---
 
 ## 🛠️ 技术架构
@@ -41,11 +50,17 @@
 项目采用解耦的模块化设计，通过 `EventBus` 进行通信：
 
 - **`core/`**: 驱动中心。包含事件总线、心跳时钟及逻辑时间模拟。
-- **`brain/`**: 认知中心。负责意图判断、记忆调度、LLM 流式交互逻辑。
+- **`brain/`**: 认知中心。负责意图判断、记忆调度、LLM 流式交互逻辑、TTS 语音合成。
 - **`persona/`**: 灵魂中心。管理 PAD 状态机，根据交互与时间流逝推演角色心境变化。
-- **`memory/`**: 存储中心。结合 Redis-like 短期记忆与 pgvector 长期向量存储。
+- **`memory/`**: 存储中心。结合 Redis-like 短期记忆、pgvector 长期向量存储、Neo4j 知识图谱。
+  - `short_term.py`: 短期记忆管理
+  - `episodic_memory.py`: 情景记忆存储
+  - `db_memory.py`: PostgreSQL 数据持久化
+  - `neo4j_memory.py`: 知识图谱存储
+  - `entity_extraction.py`: 实体提取与关系构建
+  - `memory_process.py`: 海马体记忆提炼
 - **`config/`**: 策略中心。定义角色的灵魂契约（YAML Prompts）与生存规则，同时负责存储短期的记忆和状态。
-- **`frontend/`**: 前端呈现，vibe coding加上一些个人微调，后期也许可能会重构
+- **`frontend/`**: 前端呈现。基于 React + Vite，集成 Live2D 虚拟形象、状态雷达图、语音播放等功能。
 
 ---
 
@@ -61,7 +76,7 @@
 ### 1. 环境准备
 - **Python 3.11** (推荐使用 Conda 管理环境)
 - **Node.js 18+** (前端运行环境)
-- **Docker Desktop** (用于启动 PostgreSQL + pgvector 数据库)
+- **Docker Desktop** (用于启动 PostgreSQL + pgvector + Neo4j 数据库)
 
 ### 2. 项目配置
 
@@ -97,12 +112,16 @@ npm install recharts
 ```
 
 #### 第四步：启动数据库
-项目依赖 PostgreSQL (pgvector)。使用 Docker 快速启动：
+项目依赖 PostgreSQL (pgvector) 和 Neo4j 知识图谱。使用 Docker 快速启动：
 ```bash
 # 回到项目根目录
 cd ..
 docker-compose up -d
 ```
+启动后可访问：
+- **PostgreSQL**: `localhost:5432` (向量存储)
+- **Neo4j Browser**: `http://localhost:7474` (知识图谱可视化)
+- **Neo4j Bolt**: `bolt://localhost:7687`
 
 ### 4. 启动服务
 
@@ -130,11 +149,25 @@ npm run dev
 # 前端将运行在 http://localhost:5173
 ```
 
+### 5. 调试技巧
+你是否还在为AI的时间过得太慢而感到烦恼，你是否还在为无法时间加速快速XX而感到痛苦？这些都不是问题
+
+.env中的START_TIME字段，通过填写标准的ISO 8601格式，可以直接想到哪个点就到哪个点，留空时则会默认按照当前系统时间启动
+
+.env中的TIME_ACCEL_FACTOR字段，可以随意调整加速倍率，但同时注意STATE_IDLE_MIN_TIMEOUT和STATE_IDLE_MAX_TIMEOUT都是按照游戏内时间走的，所以最好把这些都对应调大，同时将START_TIME设置为?这个字符，可以让启动的时间为上次关闭它的时间
+
+推荐加速配置
+TIME_ACCEL_FACTOR=10
+STATE_IDLE_MIN_TIMEOUT=600
+STATE_IDLE_MAX_TIMEOUT=3600
+START_TIME=?
+
+
 ---
 
 ## 📈 未来规划 (Roadmap)
 - [ ] **我有一个梦**: 在睡眠（逻辑时间深夜）时，自发对当日记忆进行深度总结与价值观修正。
-- [ ] **社交图谱 (Neo4j)**: 建立依鸣对不同用户的差异化好感度与认知关系链。
+- [x] **社交图谱 (Neo4j)**: ✅ 已完成。建立了依鸣对不同用户、地点、事件的认知关系链，支持实体提取与知识图谱存储。
 - [ ] **欲望引擎**: 建立较长期的目标，依鸣应该能够主动地构思自己的更长远的未来
 - [ ] **人格变化**：通过记忆和经历，对人格进行适当调整，我们可以见证依鸣的成长
 

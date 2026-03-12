@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import uuid
+from brain.tag_utils import remove_thought_content
 
 logger = logging.getLogger("EmberTTS")
 
@@ -14,10 +15,9 @@ class TTSManager:
 
     async def generate_base64(self, text: str):
         """合成语音并返回 Base64 编码"""
-        # 移除 <thought> 标签内容
-        import re
+        # 移除 <thought> 标签内容（使用增强的容错处理）
         import base64
-        clean_text = re.sub(r'<thought>.*?</thought>', '', text, flags=re.DOTALL)
+        clean_text = remove_thought_content(text)
         
         communicate = edge_tts.Communicate(clean_text, self.voice)
         audio_data = b""
