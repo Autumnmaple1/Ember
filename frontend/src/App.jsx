@@ -32,7 +32,11 @@ function App() {
   }, [autoPlay]);
 
   // 轮询 EventBus 逻辑时间
+  const timeTimerRef = useRef(null);
   useEffect(() => {
+    // 防止 React StrictMode 重复创建定时器
+    if (timeTimerRef.current) return;
+
     const fetchTime = () => {
       fetch("http://localhost:8000/config")
         .then(res => res.json())
@@ -41,8 +45,12 @@ function App() {
         })
         .catch(() => { });
     };
-    const timer = setInterval(fetchTime, 2000);
-    return () => clearInterval(timer);
+    fetchTime(); // 立即执行一次
+    timeTimerRef.current = setInterval(fetchTime, 2000);
+    return () => {
+      clearInterval(timeTimerRef.current);
+      timeTimerRef.current = null;
+    };
   }, []);
 
   const getEmotionColor = () => {
