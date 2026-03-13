@@ -8,6 +8,7 @@ from memory.memory_process import Hippocampus
 from memory.short_term import ShortTermMemory
 import random
 from concurrent.futures import ThreadPoolExecutor
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,6 @@ class StateManager:
 
         # 使用锁保护文件写入，防止竞争条件
         if not hasattr(self, '_state_lock'):
-            import threading
             self._state_lock = threading.Lock()
 
         with self._state_lock:
