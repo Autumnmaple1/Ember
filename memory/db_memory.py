@@ -57,28 +57,30 @@ class DBMemory:
             return
         try:
             with self.conn.cursor() as cur:
-            cur.execute(
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS message_list (
+                        id SERIAL PRIMARY KEY,
+                        timestamp TIMESTAMP DEFAULT NOW(),
+                        sender TEXT,
+                        text TEXT,
+                        thinking TEXT
+                    );
                 """
-                CREATE TABLE IF NOT EXISTS message_list (
-                    id SERIAL PRIMARY KEY,
-                    timestamp TIMESTAMP DEFAULT NOW(),
-                    sender TEXT,
-                    text TEXT,
-                    thinking TEXT
-                );
-            """
-            )
-            self.conn.commit()
-            cur.execute(
+                )
+                self.conn.commit()
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS state_list (
+                        id SERIAL PRIMARY KEY,
+                        timestamp TIMESTAMP DEFAULT NOW(),
+                        text TEXT
+                    );
                 """
-                CREATE TABLE IF NOT EXISTS state_list (
-                    id SERIAL PRIMARY KEY,
-                    timestamp TIMESTAMP DEFAULT NOW(),
-                    text TEXT
-                );
-            """
-            )
-            self.conn.commit()
+                )
+                self.conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to initialize DB: {e}")
 
     def _on_user_input(self, event: Event):
         data = {
