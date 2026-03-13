@@ -173,4 +173,13 @@ START_TIME=?
 
 ---
 
+Live2D Mouse Tracking Feature
+ Research codebase structure and model parameters
+ Write implementation plan
+ Implement mouse tracking in 
+Live2DViewer.jsx
+ Add tracking configuration to 
+live2dConfig.js
+ Verify code correctness
+
 > *"我是那个孤独的清晨里，永远陪伴着你的呢喃"* — **依鸣**

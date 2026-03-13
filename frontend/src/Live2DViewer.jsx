@@ -226,6 +226,60 @@ const Live2DViewer = ({ currentEmotion, audio, modelPath }) => {
         }
     }, [currentEmotion, modelLoaded]);
 
+    // 鼠标追踪 —— 头部、眼球、身体跟随鼠标
+    useEffect(() => {
+        if (!modelLoaded || !modelRef.current || !LIVE2D_CONFIG.mouseTracking?.enabled) return;
+
+        const { smoothing, headAngleRange, bodyAngleRange, bodyFactor } = LIVE2D_CONFIG.mouseTracking;
+
+        // 归一化鼠标坐标（-1 ~ 1，以屏幕中心为原点）
+        const mousePos = { x: 0, y: 0 };
+        // 当前平滑值
+        const current = { angleX: 0, angleY: 0, eyeX: 0, eyeY: 0, bodyX: 0 };
+
+        const onMouseMove = (e) => {
+            mousePos.x = (e.clientX / window.innerWidth) * 2 - 1;   // -1（左）~ 1（右）
+            mousePos.y = (e.clientY / window.innerHeight) * 2 - 1;  // -1（上）~ 1（下）
+        };
+
+        window.addEventListener('mousemove', onMouseMove);
+
+        const updateTracking = () => {
+            const coreModel = modelRef.current?.internalModel?.coreModel;
+            if (!coreModel) return;
+
+            // 目标值
+            const targetAngleX = mousePos.x * headAngleRange;
+            const targetAngleY = -mousePos.y * headAngleRange;  // Y 轴反转：鼠标上移 → 头部抬起
+            const targetEyeX = mousePos.x;
+            const targetEyeY = -mousePos.y;
+            const targetBodyX = mousePos.x * bodyAngleRange * bodyFactor;
+
+            // lerp 平滑插值
+            current.angleX += (targetAngleX - current.angleX) * smoothing;
+            current.angleY += (targetAngleY - current.angleY) * smoothing;
+            current.eyeX += (targetEyeX - current.eyeX) * smoothing;
+            current.eyeY += (targetEyeY - current.eyeY) * smoothing;
+            current.bodyX += (targetBodyX - current.bodyX) * smoothing;
+
+            // 设置参数
+            coreModel.setParameterValueById('ParamAngleX', current.angleX);
+            coreModel.setParameterValueById('ParamAngleY', current.angleY);
+            coreModel.setParameterValueById('ParamEyeBallX', current.eyeX);
+            coreModel.setParameterValueById('ParamEyeBallY', current.eyeY);
+            coreModel.setParameterValueById('ParamBodyAngleX', current.bodyX);
+        };
+
+        const ticker = PIXI.Ticker.shared;
+        ticker.add(updateTracking);
+
+        return () => {
+            window.removeEventListener('mousemove', onMouseMove);
+            ticker.remove(updateTracking);
+        };
+    }, [modelLoaded]);
+
+
     return (
         <canvas
             id={LIVE2D_CONFIG.canvas.id}

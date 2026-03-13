@@ -45,5 +45,13 @@ export const LIVE2D_CONFIG = {
             exponent: 2.0,     // 增加指数，使口型对音量变化更敏感（小声不张嘴，大声才张大）
             voiceRange: [2, 60] // 略微上移起始频率，过滤掉可能的低频直流偏置或底噪
         }
+    },
+    // 鼠标追踪配置 —— 模型头部、眼球、身体跟随鼠标
+    mouseTracking: {
+        enabled: true,
+        smoothing: 0.15,       // lerp 系数，越小越平滑（0~1）
+        headAngleRange: 30,    // 头部旋转最大角度
+        bodyAngleRange: 10,    // 身体旋转最大角度
+        bodyFactor: 0.4,       // 身体跟随程度（相对头部）
     }
 };
