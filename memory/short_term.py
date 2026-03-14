@@ -70,9 +70,14 @@ class ShortTermMemory:
         self._executor.submit(_log)
 
     def add_message(self, role, content):
-        # content = separate_thought_and_speech(content)[1]
+        # 日志写全文（含 thought），供记忆编码器使用
         self.async_log("./config/chat_history.log", f"{role}: {content}")
-        self._add_back(role, content)
+        # assistant 消息剥除 <thought> 再存入上下文窗口，避免反复发送内心独白
+        if role == "assistant":
+            _, speech = separate_thought_and_speech(content)
+            self._add_back(role, speech)
+        else:
+            self._add_back(role, content)
         self._save_memory()
 
     def _save_memory(self):

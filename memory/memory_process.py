@@ -120,7 +120,9 @@ class Hippocampus:
             simplified_memories = self._simplify_memories(raw_memories)
 
             # 获取图谱查询结果
-            graph_context = future_graph.result(timeout=5)
+            graph_context = self._simplify_graph(
+                future_graph.result(timeout=5), query=query, key_words=key_words
+            )
 
             # 整合结果
             result = {
@@ -167,14 +169,83 @@ class Hippocampus:
     def _simplify_memories(self, memories):
         simplified = []
         for mem in memories:
+            content = mem.get("content", "")
+            insight = mem.get("insight", "")
             simplified.append(
                 {
-                    "content": mem.get("content", ""),
-                    "insight": mem.get("insight", ""),
+                    "content": content[:200] if len(content) > 200 else content,
+                    "insight": insight[:100] if len(insight) > 100 else insight,
                     "time": mem.get("time", ""),
                 }
             )
         return simplified
+
+    def _simplify_graph(self, graph_context: dict, query: str = "", key_words: list = None) -> dict:
+        """语境探照灯：为每个实体的碎片字段智能选取最相关片段
+
+        - List<String> 碎片字段：锚点保留 + 语境匹配 + 最新兜底，合成为字符串
+        - 旧格式 String 字段（兼容）：截断至 80 字
+        """
+        entities = []
+        kws = key_words or []
+        for e in graph_context.get("entities", []):
+            entry = dict(e)
+            for field in ("bio", "vibe", "utility", "significance"):
+                val = entry.get(field)
+                if isinstance(val, list):
+                    selected = self._select_relevant_fragments(val, query, kws)
+                    entry[field] = "; ".join(selected)
+                elif isinstance(val, str) and len(val) > 80:
+                    entry[field] = val[:80]
+            entities.append(entry)
+        return {"entities": entities, "relations": graph_context.get("relations", [])}
+
+    def _select_relevant_fragments(self, fragments: list, query: str, key_words: list) -> list:
+        """从碎片列表选出最相关的片段
+
+        策略：
+          1. 锚点保留：始终保留第 0 条（核心身份定义）
+          2. 语境扫描：对剩余碎片按关键词命中评分
+             - 内容段（类别|时间|内容 的第3段）命中 +2
+             - 类别段（第1段）命中 +1
+          3. 取得分 > 0 的最高 2 条；得分均为 0 则取最新 2 条（末尾）
+        碎片格式：类别|时间|内容
+        """
+        if not fragments:
+            return []
+
+        anchor = fragments[0]
+        rest = fragments[1:]
+
+        if not rest:
+            return [anchor]
+
+        # 构建关键词集合（key_words 直接用；query 按空白分词补充；≥2 字）
+        kws = set(w.lower() for w in key_words if len(w) >= 2)
+        kws.update(w.lower() for w in query.split() if len(w) >= 2)
+
+        def score_frag(frag: str) -> int:
+            parts = frag.split("|", 2)
+            category = parts[0].lower() if len(parts) >= 1 else ""
+            content = parts[2].lower() if len(parts) == 3 else frag.lower()
+            s = 0
+            for kw in kws:
+                if kw in content:
+                    s += 2
+                if kw in category:
+                    s += 1
+            return s
+
+        scored = [(score_frag(f), f) for f in rest]
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        matched = [f for sc, f in scored if sc > 0]
+        if matched:
+            tail = matched[:2]
+        else:
+            tail = rest[-2:]  # 兜底：最新 2 条
+
+        return [anchor] + tail
 
     def _get_persistence_memory(self, query_data):
         future = concurrent.futures.Future()

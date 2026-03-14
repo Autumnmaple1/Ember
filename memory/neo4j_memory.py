@@ -6,6 +6,14 @@ from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+# 描述型字段以 List<String> 存储，每条格式为 "类别|时间|内容"
+LIST_DESCRIPTION_FIELDS: dict[str, list[str]] = {
+    "Person": ["bio"],
+    "Location": ["vibe"],
+    "Thing": ["utility"],
+    "Organization": ["significance"],
+}
+
 
 class Neo4jGraphMemory:
     def __init__(self, event_bus: EventBus):
@@ -108,6 +116,32 @@ class Neo4jGraphMemory:
             merged_aliases = list(set(existing_aliases + new_aliases + [name]))
             properties["aliases"] = merged_aliases
 
+        # 处理 List<String> 描述型字段
+        list_fields = LIST_DESCRIPTION_FIELDS.get(entity_type, [])
+        for field in list_fields:
+            if field not in properties:
+                continue
+            new_value = properties[field]
+            if is_increment:
+                if isinstance(new_value, str) and new_value:
+                    existing = self._get_entity_field_values(final_name, field)
+                    if not self._is_duplicate_fragment(existing, new_value):
+                        properties[field] = existing + [new_value]
+                    else:
+                        del properties[field]  # 与已有碎片重复，跳过写入
+                elif isinstance(new_value, list):
+                    existing = self._get_entity_field_values(final_name, field)
+                    merged = list(existing)
+                    for frag in new_value:
+                        if isinstance(frag, str) and frag and not self._is_duplicate_fragment(merged, frag):
+                            merged.append(frag)
+                    properties[field] = merged
+            else:
+                # 覆盖模式：统一规范化为列表
+                if isinstance(new_value, str):
+                    properties[field] = [new_value]
+                # isinstance list：保持原样
+
         def _upsert_tx(tx):
             if is_increment:
                 # 增量更新：列表属性合并去重，其他属性覆盖
@@ -183,6 +217,45 @@ class Neo4jGraphMemory:
 
         with self.driver.session(database=self.db_name) as session:
             return session.execute_read(_get_tx)
+
+    def _get_entity_field_values(self, name: str, field: str) -> list:
+        """读取实体某列表型描述字段的当前值；若字段为旧格式 String 则自动迁移为列表"""
+
+        def _tx(tx):
+            result = tx.run(
+                f"MATCH (e:Entity {{name: $name}}) RETURN e.{field} AS val",
+                name=name,
+            )
+            record = result.single()
+            if record and record["val"] is not None:
+                val = record["val"]
+                if isinstance(val, (list, tuple)):
+                    return list(val)
+                return [str(val)]  # 旧 String 值 → 迁移为单元素列表
+            return []
+
+        with self.driver.session(database=self.db_name) as session:
+            return session.execute_read(_tx)
+
+    def _is_duplicate_fragment(self, existing: list, new_frag: str) -> bool:
+        """判断新碎片是否与已有碎片语义重复（内容部分的字符串包含检测）
+
+        碎片格式：类别|时间|内容（取第3段作为内容；格式不符时整体作为内容）
+        """
+
+        def extract_content(frag: str) -> str:
+            parts = frag.split("|", 2)
+            return parts[2].strip() if len(parts) == 3 else frag.strip()
+
+        new_content = extract_content(new_frag)
+        if not new_content:
+            return True  # 空碎片视为重复
+
+        for frag in existing:
+            ec = extract_content(frag)
+            if new_content in ec or ec in new_content:
+                return True
+        return False
 
     def upsert_edge(
         self,

@@ -70,7 +70,7 @@ class Brain:
 
             self.memory.update_base_prompt(dynamic_prompt)
 
-            self._llm_speak(self.memory, pack=False)
+            self._llm_speak(self.memory, pack=True)
         finally:
             self._is_processing = False
 
