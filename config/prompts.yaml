@@ -192,7 +192,7 @@ graph_consolidation_prompt: |
   # 实体属性规范 (Schema) #
   1. **Person (人物)**
     - aliases: 别名/昵称列表
-    - bio: 核心背景简述
+    - bio: **原子事实碎片列表**；每次只提供本条记忆新增的一条事实，格式为 "类别|时间|内容"（类别示例：背景/个性/关系/成就）
     - age: 年龄
     - gender: 性别
     - occupation: 职业/身份列表
@@ -202,14 +202,14 @@ graph_consolidation_prompt: |
   2. **Location (地点)**
     - aliases: 别名
     - type: 场景类型（如：学校、餐厅、虚拟空间）
-    - vibe: 氛围描述（如：静谧、充满学术气息）
+    - vibe: **氛围印象碎片列表**；每次只提供本条记忆新增的一条印象，格式为 "类别|时间|内容"（类别示例：氛围/印象/细节）
     - located_in: 上级地点（如：南京大学）
     - significance: 该地点对角色的个人意义
 
   3. **Thing (具体事物)**
     - aliases: 别名/昵称
     - category: 类别（如：观鸟装备、代码工具、日用品）
-    - utility: 核心用途
+    - utility: **用途事实碎片列表**；每次只提供本条记忆新增的一条用途，格式为 "类别|时间|内容"（类别示例：用途/特点/评价）
     - possession: 归属状态（如：拥有、他人借予、环境自带）
     - sentiment: 情感评价（如：正面、负面、中立）
 
@@ -231,7 +231,9 @@ graph_consolidation_prompt: |
   6. **Organization (组织)**
     - aliases: 别名/简称
     - industry: 行业领域（如：教育、科技、社交）
-    - significance: 该组织对角色的个人意义
+    - significance: **关联意义碎片列表**；每次只提供本条记忆新增的一条意义，格式为 "类别|时间|内容"（类别示例：关联/重要性/经历）
+
+  > **列表型字段写作规则**：每次 upsert 只传该字段的一条新碎片（String），系统自动去重追加。格式严格为 "类别|时间|内容"，禁止合并多条事实写入同一碎片。
 
   # 关系属性规范 (Schema) #
 
@@ -275,12 +277,12 @@ graph_consolidation_prompt: |
       "name": "依鸣",
       "properties": {
         "aliases": ["我","Yiming"],
-        "bio": "南京大学匡亚明学院大一新生，计算机专业，喜欢写代码、二次元、听歌和观鸟。",
+        "bio": "背景|长期|南京大学匡亚明学院大一新生，计算机专业，喜欢写代码、二次元、听歌和观鸟",
         "age": 18,
         "gender": "女",
         "occupation": ["学生"],
         "affinity_score": 80,
-        "tags": ["友善", "可爱"，"有点内向"]
+        "tags": ["友善", "可爱", "有点内向"]
       },
       "is_increment": true
     },
@@ -291,7 +293,7 @@ graph_consolidation_prompt: |
       "properties": {
         "aliases": ["南大", "NJU"],
         "type": "学校",
-        "vibe": "充满学术气息",
+        "vibe": "氛围|长期|充满学术气息，图书馆安静，校园宽阔",
         "located_in": "南京",
         "significance": "依鸣的学习和生活场所"
       },

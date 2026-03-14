@@ -179,13 +179,20 @@ class Hippocampus:
         return simplified
 
     def _simplify_graph(self, graph_context: dict) -> dict:
-        """截断图谱实体的 bio 字段，减少 token 占用"""
+        """简化图谱实体字段，减少 token 占用
+
+        - List<String> 描述字段：保留最新 3 条碎片
+        - 旧格式 String 字段（兼容）：截断至 80 字
+        """
         entities = []
         for e in graph_context.get("entities", []):
             entry = dict(e)
-            bio = entry.get("bio", "")
-            if len(bio) > 80:
-                entry["bio"] = bio[:80]
+            for field in ("bio", "vibe", "utility", "significance"):
+                val = entry.get(field)
+                if isinstance(val, list):
+                    entry[field] = val[-3:]  # 保留最新 3 条
+                elif isinstance(val, str) and len(val) > 80:
+                    entry[field] = val[:80]  # 旧格式兼容截断
             entities.append(entry)
         return {"entities": entities, "relations": graph_context.get("relations", [])}
 
