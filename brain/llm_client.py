@@ -28,6 +28,36 @@ class LLMClient:
         data = json.loads(good_json_string)
         return data
 
+    def _apply_explicit_cache(self, messages: list[dict]) -> list[dict]:
+        """
+        对 system message 应用显式缓存。
+
+        将 system message 改为 array 格式并添加 cache_control 参数，
+        启用 DashScope 的显式缓存机制（5分钟 TTL）。
+
+        使用场景：
+          - SYSTEM_PROMPT 是固定不变的 → 每次请求可享受缓存加速
+          - 返回结果会包含 usage.prompt_tokens_details.cached_tokens
+          - cached token 费率约为正常输入 token 的 10%
+        """
+        if not messages or messages[0].get("role") != "system":
+            return messages
+
+        # 保留原始消息列表，只修改 system message
+        messages = list(messages)  # 浅拷贝
+        system_msg = dict(messages[0])  # 深拷贝 system message
+
+        # 将 content 转为 array 格式（必须），并添加 cache_control
+        system_msg["content"] = [{"type": "text", "text": system_msg["content"]}]
+        system_msg["cache_control"] = {"type": "ephemeral"}
+
+        messages[0] = system_msg
+        logger.debug(
+            f"[Cache] 已对 system message 应用显式缓存 "
+            f"(prompt_len={len(system_msg['content'][0]['text'])} 字符)"
+        )
+        return messages
+
     def one_chat(self, model_config, messages, timeout=30):
         """单次对话，带超时和重试"""
         client = (
@@ -35,6 +65,9 @@ class LLMClient:
             if model_config == settings.LARGE_LLM
             else self.small_client
         )
+
+        # 应用显式缓存
+        messages = self._apply_explicit_cache(messages)
 
         max_retries = 2
         for attempt in range(max_retries):
@@ -48,6 +81,20 @@ class LLMClient:
                     timeout=timeout,
                 )
                 full_response = response.choices[0].message.content
+
+                # 记录缓存命中情况
+                usage = getattr(response, "usage", None)
+                if usage:
+                    token_details = getattr(usage, "prompt_tokens_details", None)
+                    if token_details:
+                        cached_tokens = getattr(token_details, "cached_tokens", 0)
+                        try:
+                            cached_tokens = int(cached_tokens)
+                        except (TypeError, ValueError):
+                            cached_tokens = 0
+                        if cached_tokens > 0:
+                            logger.info(f"[Cache] ✅ 缓存命中 {cached_tokens} token")
+
                 return full_response
             except Exception as e:
                 logger.error(f"OneChat Error (attempt {attempt + 1}/{max_retries}): {e}")
@@ -61,6 +108,9 @@ class LLMClient:
             if model_config == settings.LARGE_LLM
             else self.small_client
         )
+
+        # 应用显式缓存
+        messages = self._apply_explicit_cache(messages)
 
         try:
             response = client.chat.completions.create(
@@ -79,6 +129,19 @@ class LLMClient:
                 content = chunk.choices[0].delta.content
                 if content is not None:
                     yield content
+
+            # 在流结束后记录缓存命中情况
+            usage = getattr(response, "usage", None)
+            if usage:
+                token_details = getattr(usage, "prompt_tokens_details", None)
+                if token_details:
+                    cached_tokens = getattr(token_details, "cached_tokens", 0)
+                    try:
+                        cached_tokens = int(cached_tokens)
+                    except (TypeError, ValueError):
+                        cached_tokens = 0
+                    if cached_tokens > 0:
+                        logger.info(f"[Cache] ✅ 缓存命中 {cached_tokens} token")
 
         except Exception as e:
             yield f"[Error]: {str(e)}"

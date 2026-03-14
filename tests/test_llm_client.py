@@ -37,6 +37,13 @@ class TestLLMClient:
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "测试回复"
 
+        # 设置 usage 对象以支持缓存检查
+        mock_token_details = MagicMock()
+        mock_token_details.cached_tokens = 0
+        mock_usage = MagicMock()
+        mock_usage.prompt_tokens_details = mock_token_details
+        mock_response.usage = mock_usage
+
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = mock_response
         mock_openai.return_value = mock_client
@@ -100,10 +107,18 @@ class TestLLMClient:
             chunks = [
                 MagicMock(choices=[MagicMock(delta=MagicMock(content="你好", reasoning_content=None))]),
                 MagicMock(choices=[MagicMock(delta=MagicMock(content="世界", reasoning_content=None))]),
-                MagicMock(choices=[MagicMock(delta=MagicMock(content=None, reasoning_content=None))]),
             ]
             for chunk in chunks:
                 yield chunk
+
+            # 最后一个 chunk 包含 usage 信息
+            final_chunk = MagicMock(choices=[MagicMock(delta=MagicMock(content=None, reasoning_content=None))])
+            mock_token_details = MagicMock()
+            mock_token_details.cached_tokens = 0
+            mock_usage = MagicMock()
+            mock_usage.prompt_tokens_details = mock_token_details
+            final_chunk.usage = mock_usage
+            yield final_chunk
 
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = mock_stream()
