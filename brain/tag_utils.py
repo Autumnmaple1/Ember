@@ -111,24 +111,30 @@ def validate_and_fix_llm_output(text: str) -> str:
     """
     验证并修复 LLM 输出的格式问题
     主要用于在保存到数据库前进行格式校验
-    
+
     Args:
         text: LLM 输出的原始文本
-        
+
     Returns:
         修复后的文本
     """
     if not text:
         return text
-    
+
     # 修复 thought 标签
     text = fix_thought_tags(text)
-    
+
+    # 剥除 LLM 自行发明的 <response> 标签（保留内容）
+    if '<response>' in text or '</response>' in text:
+        text = re.sub(r'<response>\s*', '', text)
+        text = re.sub(r'\s*</response>', '', text)
+        logger.warning("剥除了多余的 <response> 标签")
+
     # 清理其他可能的格式问题
     # 移除多余的反引号
     text = re.sub(r'```\s*', '', text)
-    
+
     # 确保不会有多余的空行
     text = re.sub(r'\n{3,}', '\n\n', text)
-    
+
     return text.strip()

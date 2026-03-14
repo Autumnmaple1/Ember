@@ -340,6 +340,9 @@ function App() {
                 displayContent = "";
               }
 
+              // 剥除 LLM 自行添加的 <response> 标签（保留内容）
+              displayContent = displayContent.replace(/<\/?response>/g, "").trim();
+
               if (existingIndex !== -1) {
                 const newMessages = [...prev];
                 newMessages[existingIndex] = {
