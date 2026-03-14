@@ -88,7 +88,6 @@ class Settings:
         START_TIME = state_data.get("对应时间", time.time())
 
     CONTEXT_WINDOW_SIZE = int(os.getenv("CONTEXT_WINDOW_SIZE", "20"))
-    ENABLE_CONTEXT_CACHE = os.getenv("ENABLE_CONTEXT_CACHE", "false").lower() == "true"
 
     PG_HOST = os.getenv("PG_HOST", "localhost")
     PG_PORT = int(os.getenv("PG_PORT", "5432"))
