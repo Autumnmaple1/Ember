@@ -59,15 +59,11 @@ class TestBrainConcurrency:
     def test_processing_flag_prevents_concurrent(self):
         """测试 _is_processing 标志防止并发处理"""
         from unittest.mock import Mock, patch
+        from brain.core import Brain
+        from core.event_bus import EventBus
 
-        with patch('brain.core.LLMClient') as mock_llm, \
-             patch('brain.core.Hippocampus') as mock_hippo:
-
-            from brain.core import Brain
-            from core.event_bus import EventBus
-
+        with patch('brain.core.LLMClient') as mock_llm:
             mock_llm.return_value.stream_chat.return_value = iter(["测试回复"])
-            mock_hippo.return_value.road_memory.return_value = []
 
             event_bus = EventBus()
             mock_state = Mock()
@@ -77,8 +73,10 @@ class TestBrainConcurrency:
             mock_memory.get_full_messages.return_value = [
                 {"role": "system", "content": "test"}
             ]
+            mock_hippo = Mock()
+            mock_hippo.road_memory.return_value = []
 
-            brain = Brain(event_bus, mock_state, mock_memory, mock_hippo.return_value)
+            brain = Brain(event_bus, mock_state, mock_memory, mock_hippo)
 
             # 设置处理中标志
             brain._is_processing = True
@@ -101,17 +99,14 @@ class TestBrainErrorHandling:
 
         event_bus = EventBus()
 
-        with patch('brain.core.LLMClient') as mock_llm, \
-             patch('brain.core.Hippocampus') as mock_hippo:
-
+        with patch('brain.core.LLMClient') as mock_llm:
             # 模拟 LLM 抛出异常
             mock_llm_instance = MagicMock()
             mock_llm_instance.stream_chat.side_effect = Exception("API 错误")
             mock_llm.return_value = mock_llm_instance
 
-            mock_hippo_instance = MagicMock()
+            mock_hippo_instance = Mock()
             mock_hippo_instance.road_memory.return_value = []
-            mock_hippo.return_value = mock_hippo_instance
 
             mock_state = Mock()
             mock_state.prompt_injection = ""
@@ -128,7 +123,7 @@ class TestBrainErrorHandling:
 
             # 调用 _llm_speak，不应该抛出异常
             try:
-                brain._llm_speak(mock_memory, pack=False)
+                brain._llm_speak(pack=False)
             except Exception as e:
                 pytest.fail(f"_llm_speak 不应该抛出异常: {e}")
 
