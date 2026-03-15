@@ -78,16 +78,17 @@ class Settings:
     IDLE_SPEAKING_UPDATE_PROMPT = PROMPTS.get("idle_speaking_update_prompt", "")
 
     TIME_ACCEL_FACTOR = float(os.getenv("TIME_ACCEL_FACTOR", "1.0"))
-    START_TIME = os.getenv(
-        "START_TIME",
-        time.time(),
-    )
+    START_TIME = os.getenv("START_TIME", str(time.time()))
     if START_TIME == "?":
         with open("./config/state.json", "r", encoding="utf-8") as f:
             state_data = json.load(f)
         START_TIME = state_data.get("对应时间", time.time())
 
     CONTEXT_WINDOW_SIZE = int(os.getenv("CONTEXT_WINDOW_SIZE", "20"))
+
+    # LLM 配置
+    LLM_MAX_CHUNKS = int(os.getenv("LLM_MAX_CHUNKS", "10000"))
+    LLM_STREAM_TIMEOUT = float(os.getenv("LLM_STREAM_TIMEOUT", "60.0"))
 
     PG_HOST = os.getenv("PG_HOST", "localhost")
     PG_PORT = int(os.getenv("PG_PORT", "5432"))
@@ -106,8 +107,14 @@ class Settings:
     MEMORY_DECENT_FACTOR = float(os.getenv("MEMORY_DECENT_FACTOR", "0.5"))
     RECALL_TOP_K = int(os.getenv("RECALL_TOP_K", "10"))
 
-    # LLM generation temperature; overridable via env for benchmark/determinism
+    # LLM 配置
     LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.7"))
+    LLM_MAX_CHUNKS = int(os.getenv("LLM_MAX_CHUNKS", "10000"))
+
+    # TTS 配置
+    TTS_MAX_CONCURRENT = int(os.getenv("TTS_MAX_CONCURRENT", "3"))
+    TTS_MAX_TEXT_LENGTH = int(os.getenv("TTS_MAX_TEXT_LENGTH", "500"))
+    TTS_TIMEOUT_SECONDS = float(os.getenv("TTS_TIMEOUT_SECONDS", "30.0"))
 
 
 settings = Settings()

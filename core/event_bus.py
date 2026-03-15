@@ -54,10 +54,12 @@ class EventBus:
     def subscribe(self, event_name: str, callback: Callable):
         self._subscribers[event_name].append(callback)
 
-    def publish(self, event: Event):
+    def publish(self, event: Event) -> None:
         if event.name in self._subscribers:
             for callback in self._subscribers[event.name]:
                 try:
                     callback(event)
-                except Exception as e:
+                except (TypeError, ValueError, KeyError, AttributeError) as e:
                     logger.error(f"处理事件 {event.name} 时出错: {e}")
+                except Exception as e:
+                    logger.exception(f"处理事件 {event.name} 时发生未预期错误: {e}")

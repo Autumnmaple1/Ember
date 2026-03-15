@@ -1,6 +1,9 @@
+import logging
 import time
 import threading
 from core.event_bus import EventBus, Event
+
+logger = logging.getLogger(__name__)
 
 
 class Heartbeat:
@@ -32,8 +35,6 @@ class Heartbeat:
                 consecutive_errors = 0  # 成功执行后重置错误计数
             except Exception as e:
                 consecutive_errors += 1
-                import logging
-                logger = logging.getLogger(__name__)
                 logger.error(f"心跳 tick 异常 (连续 {consecutive_errors} 次): {e}")
 
                 if consecutive_errors >= max_consecutive_errors:

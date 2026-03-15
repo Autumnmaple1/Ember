@@ -1,9 +1,9 @@
 import logging
-
-logger = logging.getLogger(__name__)
 import time
 import queue
 import threading
+
+logger = logging.getLogger(__name__)
 
 from core.event_bus import EventBus, Event
 from core.heartbeat import Heartbeat

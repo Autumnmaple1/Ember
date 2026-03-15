@@ -33,6 +33,7 @@ class StateManager:
 
         self.current_state = settings.STATE
         self._thinking_lock = threading.Lock()  # 保护 is_thinking
+        self._state_lock = threading.Lock()  # 保护状态文件写入
         self._thinking = False
         self.is_sleeping = False
 
@@ -124,16 +125,12 @@ class StateManager:
 
         self.event_bus.publish(Event("state.update", data={"new_state": new_state}))
 
-        # 使用锁保护文件写入，防止竞争条件
-        if not hasattr(self, '_state_lock'):
-            self._state_lock = threading.Lock()
-
         with self._state_lock:
             try:
                 with open("./config/state.json", "w", encoding="utf-8") as f:
                     json.dump(new_state, f, ensure_ascii=False, indent=2)
                 self.current_state.update(new_state)
-            except Exception as e:
+            except (IOError, OSError, TypeError) as e:
                 logger.error(f"状态文件写入失败: {e}")
 
     def _on_tick(self, event: Event):

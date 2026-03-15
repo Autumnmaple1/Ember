@@ -2,6 +2,7 @@ import json
 import threading
 import os
 import re
+import copy
 from concurrent.futures import ThreadPoolExecutor
 from brain.tag_utils import extract_thought_and_speech
 
@@ -34,7 +35,7 @@ class ShortTermMemory:
                 with open("./config/chat_memory.json", "r", encoding="utf-8") as f:
                     self.memory = json.load(f)
                     self._truncate_memory()
-        except Exception as e:
+        except (json.JSONDecodeError, IOError, OSError) as e:
             print(f"Error loading memory: {e}")
 
     def _add_front(self, role, content):
@@ -49,22 +50,22 @@ class ShortTermMemory:
         if len(self.memory) > self.max_memory_size:
             self.memory = self.memory[-self.max_memory_size :]
 
-    def async_log(self, filename, content):
+    def async_log(self, filename: str, content: str) -> None:
         def _log():
             try:
                 with open(filename, "a", encoding="utf-8", buffering=1) as f:
                     f.write(content + "\n")
-            except Exception as e:
+            except (IOError, OSError) as e:
                 print(f"Error writing log: {e}")
 
         self._executor.submit(_log)
 
-    def _async_log_clear(self, filename):
+    def _async_log_clear(self, filename: str) -> None:
         def _log():
             try:
                 with open(filename, "w", encoding="utf-8", buffering=1) as f:
                     f.write("")
-            except Exception as e:
+            except (IOError, OSError) as e:
                 print(f"Error clearing log: {e}")
 
         self._executor.submit(_log)
@@ -80,12 +81,12 @@ class ShortTermMemory:
             self._add_back(role, content)
         self._save_memory()
 
-    def _save_memory(self):
+    def _save_memory(self) -> None:
         def _save():
             try:
                 with open("./config/chat_memory.json", "w", encoding="utf-8") as f:
                     json.dump(self.memory, f, ensure_ascii=False, indent=4)
-            except Exception as e:
+            except (IOError, OSError, TypeError) as e:
                 print(f"Error saving memory: {e}")
 
         self._executor.submit(_save)
@@ -99,9 +100,8 @@ class ShortTermMemory:
             {"role": "system", "content": system_content},
         ] + self.memory
 
-    def get_memory(self):
+    def get_memory(self) -> dict:
         """返回内存的副本，防止外部修改"""
-        import copy
         return {"history": copy.deepcopy(self.memory)}
 
     def clear_memory(self):

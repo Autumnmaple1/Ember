@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import uuid
+from config.settings import settings
 from brain.tag_utils import remove_thought_content
 
 logger = logging.getLogger("EmberTTS")
@@ -13,10 +14,21 @@ class TTSManager:
         self.output_dir = "data/audio"
         os.makedirs(self.output_dir, exist_ok=True)
 
-    async def generate_base64(self, text: str, timeout: float = 30.0):
-        """合成语音并返回 Base64 编码，带超时保护"""
+    async def generate_base64(self, text: str, timeout: float | None = None) -> str | None:
+        """合成语音并返回 Base64 编码，带超时保护
+
+        Args:
+            text: 要合成的文本
+            timeout: 超时时间（秒），None 则使用配置默认值
+
+        Returns:
+            Base64 编码的音频数据，失败返回 None
+        """
         import base64
         import asyncio
+
+        # 使用配置默认值
+        actual_timeout = timeout if timeout is not None else settings.TTS_TIMEOUT_SECONDS
 
         try:
             # 移除 <thought> 标签内容
@@ -25,12 +37,12 @@ class TTSManager:
             # 使用 asyncio.wait_for 包装 TTS 操作
             audio_data = await asyncio.wait_for(
                 self._do_tts(clean_text),
-                timeout=timeout
+                timeout=actual_timeout
             )
 
             return base64.b64encode(audio_data).decode('utf-8')
         except asyncio.TimeoutError:
-            logger.error(f"TTS 合成超时 (>{timeout}s)")
+            logger.error(f"TTS 合成超时 (>{actual_timeout}s)")
             return None
         except Exception as e:
             logger.error(f"TTS 合成失败: {e}")
