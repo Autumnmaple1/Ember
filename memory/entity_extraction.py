@@ -2,7 +2,6 @@ import json
 import logging
 import re
 import threading
-from pgvector.psycopg2 import register_vector
 from core.event_bus import EventBus, Event
 from config.settings import settings
 from brain.llm_client import LLMClient

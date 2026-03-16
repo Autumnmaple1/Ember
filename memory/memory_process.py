@@ -233,7 +233,9 @@ class Hippocampus:
             )
             future_graph = executor.submit(
                 self._retrieve_graph_memory,
-                entities=entities
+                entities=entities,
+                query=query,
+                keywords=keywords
             )
 
             # 获取结果（带超时）
@@ -276,14 +278,19 @@ class Hippocampus:
             logger.error("情节记忆检索超时")
             return []
 
-    def _retrieve_graph_memory(self, entities: list[str]) -> dict:
+    def _retrieve_graph_memory(
+        self,
+        entities: list[str],
+        query: str,
+        keywords: list[str]
+    ) -> dict:
         """检索图谱记忆"""
         if not self.graph_memory or not entities:
             return {"entities": [], "relations": []}
 
         try:
             result = self.graph_memory.query_entities_by_names_with_aliases(entities)
-            return self._simplify_graph_result(result)
+            return self._simplify_graph_result(result, query, keywords)
         except Exception as e:
             logger.error(f"图谱记忆检索失败: {e}")
             return {"entities": [], "relations": []}
@@ -305,7 +312,12 @@ class Hippocampus:
             })
         return simplified
 
-    def _simplify_graph_result(self, graph_context: dict) -> dict:
+    def _simplify_graph_result(
+        self,
+        graph_context: dict,
+        query: str = "",
+        keywords: list[str] | None = None
+    ) -> dict:
         """
         简化图谱结果
 
@@ -323,7 +335,7 @@ class Hippocampus:
 
                 if isinstance(value, list):
                     # 列表字段：智能选取相关片段
-                    selected = self._select_relevant_fragments(value)
+                    selected = self._select_relevant_fragments(value, query, keywords or [])
                     entry[field] = "; ".join(selected)
                 elif isinstance(value, str) and len(value) > MAX_STRING_LEN:
                     # 字符串字段：简单截断
@@ -336,7 +348,12 @@ class Hippocampus:
             "relations": graph_context.get("relations", [])
         }
 
-    def _select_relevant_fragments(self, fragments: list[str]) -> list[str]:
+    def _select_relevant_fragments(
+        self,
+        fragments: list[str],
+        query: str = "",
+        keywords: list[str] | None = None
+    ) -> list[str]:
         """
         从碎片列表选取最相关的片段
 
@@ -356,8 +373,19 @@ class Hippocampus:
         if not rest:
             return [anchor]
 
+        # 构建关键词集合
+        kws = set()
+        if keywords:
+            kws.update(w.lower() for w in keywords if len(w) >= MIN_KEYWORD_LENGTH)
+        if query:
+            kws.update(w.lower() for w in query.split() if len(w) >= MIN_KEYWORD_LENGTH)
+
+        # 没有关键词时退化为兜底策略
+        if not kws:
+            return [anchor] + rest[-2:]
+
         # 计算每个片段的得分
-        scored = [(self._calculate_fragment_score(f), f) for f in rest]
+        scored = [(self._calculate_fragment_score(f, kws), f) for f in rest]
         scored.sort(key=lambda x: x[0], reverse=True)
 
         # 选取得分 > 0 的，否则取最新的
@@ -366,11 +394,29 @@ class Hippocampus:
 
         return [anchor] + tail
 
-    def _calculate_fragment_score(self, fragment: str) -> int:
-        """计算片段相关性得分（简化版，不带关键词时使用）"""
-        # 这里可以扩展为基于查询关键词的评分
-        # 目前简单返回 0，表示使用兜底策略
-        return 0
+    def _calculate_fragment_score(self, fragment: str, keywords: set[str]) -> int:
+        """
+        计算片段相关性得分
+
+        Args:
+            fragment: 片段字符串，格式：类别|时间|内容
+            keywords: 关键词集合（小写）
+
+        Returns:
+            相关性得分
+        """
+        parts = fragment.split("|", 2)
+        category = parts[0].lower() if len(parts) >= 1 else ""
+        content = parts[2].lower() if len(parts) == 3 else fragment.lower()
+
+        score = 0
+        for kw in keywords:
+            if kw in content:
+                score += CONTENT_MATCH_SCORE
+            if kw in category:
+                score += CATEGORY_MATCH_SCORE
+
+        return score
 
     def _safe_parse_json(self, content: str) -> list | dict | None:
         """

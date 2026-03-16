@@ -86,10 +86,6 @@ class Settings:
 
     CONTEXT_WINDOW_SIZE = int(os.getenv("CONTEXT_WINDOW_SIZE", "20"))
 
-    # LLM 配置
-    LLM_MAX_CHUNKS = int(os.getenv("LLM_MAX_CHUNKS", "10000"))
-    LLM_STREAM_TIMEOUT = float(os.getenv("LLM_STREAM_TIMEOUT", "60.0"))
-
     PG_HOST = os.getenv("PG_HOST", "localhost")
     PG_PORT = int(os.getenv("PG_PORT", "5432"))
     PG_USER = os.getenv("PG_USER", "postgres")
@@ -110,6 +106,7 @@ class Settings:
     # LLM 配置
     LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.7"))
     LLM_MAX_CHUNKS = int(os.getenv("LLM_MAX_CHUNKS", "10000"))
+    LLM_STREAM_TIMEOUT = float(os.getenv("LLM_STREAM_TIMEOUT", "60.0"))
 
     # TTS 配置
     TTS_MAX_CONCURRENT = int(os.getenv("TTS_MAX_CONCURRENT", "3"))

@@ -5,10 +5,8 @@ Ember 服务器主模块
 """
 import asyncio
 import json
-import logging
 import os
 import time
-from typing import TYPE_CHECKING
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -27,9 +25,6 @@ from memory.episodic_memory import EpisodicMemory
 from memory.memory_process import Hippocampus
 from memory.short_term import ShortTermMemory
 from persona.state_manager import StateManager
-
-if TYPE_CHECKING:
-    pass
 
 logger = get_logger(__name__)
 

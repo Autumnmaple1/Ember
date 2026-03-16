@@ -160,7 +160,7 @@ class TestBrainErrorHandling:
 
             # 调用 _llm_speak（在锁内），错误不应该传播
             try:
-                brain._llm_speak(mock_memory, pack=False)
+                brain._llm_speak(pack=False)
             except:
                 pass  # 异常已被内部捕获
 
