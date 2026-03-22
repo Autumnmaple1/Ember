@@ -137,12 +137,10 @@ class Brain:
                     break
 
                 full_content += chunk
-                self.event_bus.publish(Event(name="llm.chunk", data={"text": chunk}))
 
         except Exception as e:
             logger.error(f"LLM 流式调用失败: {e}")
             error_msg = "[系统: AI 响应出现问题，请稍后再试]"
-            self.event_bus.publish(Event(name="llm.chunk", data={"text": error_msg}))
             full_content = error_msg
 
         if full_content:
@@ -158,6 +156,11 @@ class Brain:
                 tool_calls = self.tool_processor.extract_tool_calls(full_content)
 
                 if not tool_calls:
+                    if iteration == 1:
+                        # 首轮输出先在服务端缓冲；确认没有工具调用后再整体回放给前端。
+                        self.event_bus.publish(
+                            Event(name="llm.chunk", data={"text": full_content})
+                        )
                     break  # 没有工具调用，结束循环
 
                 logger.info(
