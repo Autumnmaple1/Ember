@@ -453,10 +453,13 @@ class StateManager:
                     self.is_sleeping = False
 
                 if impulse.get("should_speak", False):
+                    idle_duration_seconds = max(
+                        0.0, logical_now - self.last_interaction_logical_time
+                    )
                     self.event_bus.publish(
                         Event(
                             name="idle_speak",
-                            data={},
+                            data={"idle_duration_seconds": idle_duration_seconds},
                         )
                     )
 

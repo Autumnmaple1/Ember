@@ -65,7 +65,12 @@ class Brain:
         def _speak():
             with self.lock:
                 self.memory.update_base_prompt(settings.SYSTEM_PROMPT)
-            self._llm_speak(self.memory, pack=True, memories="")
+            self._llm_speak(
+                self.memory,
+                pack=True,
+                memories="",
+                idle_duration_seconds=event.data.get("idle_duration_seconds"),
+            )
 
         thread = threading.Thread(target=_speak)
         thread.start()
@@ -286,7 +291,23 @@ class Brain:
 
         return full_content, chunk_count
 
-    def _llm_speak(self, memory, pack: bool = False, memories: str = ""):
+    @staticmethod
+    def _format_idle_duration(seconds: float) -> str:
+        """用最大的时间单位表示空闲时长，并保留一位小数。"""
+        seconds = max(0.0, float(seconds))
+        if seconds >= 24 * 60 * 60:
+            return f"{seconds / (24 * 60 * 60):.1f}天"
+        if seconds >= 60 * 60:
+            return f"{seconds / (60 * 60):.1f}小时"
+        return f"{seconds / 60:.1f}分钟"
+
+    def _llm_speak(
+        self,
+        memory,
+        pack: bool = False,
+        memories: str = "",
+        idle_duration_seconds: float = None,
+    ):
         # 立即发布 llm.started 事件，让前端尽早显示"正在思考"
         self.event_bus.publish(Event(name="llm.started", data=""))
         self._is_speaking = True
@@ -306,6 +327,9 @@ class Brain:
                     "对方" if msg["role"] == "user" else f"{settings.CHARACTER_NAME}"
                 )
                 history_parts.append(f"{role_label}: {msg['content']}\n")
+            if idle_duration_seconds is not None:
+                idle_duration = self._format_idle_duration(idle_duration_seconds)
+                history_parts.append(f"user: （{idle_duration}没有回复）\n")
             formatted_history = "".join(history_parts)
 
             dynamic_context = ""
