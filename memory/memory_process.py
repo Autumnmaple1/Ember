@@ -7,7 +7,7 @@ from config.settings import settings
 from core.event_bus import EventBus, Event
 from brain.llm_client import LLMClient
 from brain.tag_utils import remove_speech_tags
-from memory.neo4j_memory import Neo4jGraphMemory
+from memory.postgres_graph_memory import PostgresGraphMemory
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +20,10 @@ class Hippocampus:
         self.event_bus.subscribe("memory.preprocess", self._on_preprocess_request)
         self.llm_client = LLMClient()
 
-        # 初始化 Neo4j 图谱连接
+        # 初始化 PostgreSQL 图谱存储
         self.graph_memory = None
-        if settings.ENABLE_NEO4J:
-            self.graph_memory = Neo4jGraphMemory(event_bus)
+        if settings.ENABLE_GRAPH_MEMORY:
+            self.graph_memory = PostgresGraphMemory(event_bus)
 
     def _load_experience(self):
         try:
@@ -115,7 +115,7 @@ class Hippocampus:
         logger.info(f"[query_memory] query='{query[:50]}...', keywords={keywords}")
 
         try:
-            # 并行检索：向量检索 + 图谱查询
+            # 并行检索：PostgreSQL 向量检索 + 关系图查询
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
                 # 任务1：PostgreSQL 向量检索
                 future_episodic = executor.submit(
@@ -123,7 +123,7 @@ class Hippocampus:
                     {"query": query, "key_words": keywords},
                 )
 
-                # 任务2：Neo4j 图谱查询
+                # 任务2：PostgreSQL 实体关系查询
                 future_graph = executor.submit(
                     self._get_graph_memory, potential_entities
                 )
@@ -233,7 +233,7 @@ class Hippocampus:
             return []
 
     def _get_graph_memory(self, entities: list) -> dict:
-        """从 Neo4j 图谱中检索实体及关系"""
+        """从 PostgreSQL 实体关系表中检索实体及关系"""
         if not self.graph_memory or not entities:
             return {"entities": [], "relations": []}
 

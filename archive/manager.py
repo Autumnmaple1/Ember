@@ -13,7 +13,6 @@ import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from archive.models import ArchiveManifest, ArchiveSlot, ArchiveStats, ArchiveResult
 from archive.exceptions import (
@@ -23,8 +22,8 @@ from archive.exceptions import (
     ArchiveVersionError,
     ArchiveInProgressError,
 )
-from archive.exporters import JsonExporter, PostgresExporter, Neo4jExporter
-from archive.importers import JsonImporter, PostgresImporter, Neo4jImporter
+from archive.exporters import JsonExporter, PostgresExporter
+from archive.importers import JsonImporter, PostgresImporter
 from archive.utils.compress import compress_archive, extract_archive, get_archive_size
 from archive.utils.validate import validate_archive, calculate_dir_checksum
 from archive.utils.compat import check_version_compatibility, get_current_version
@@ -177,7 +176,7 @@ class ArchiveManager:
                         {"files": json_result.stats.get("files_count", 0)},
                     )
 
-                    # Step 3: 导出 PostgreSQL 数据 (15-55%)
+                    # Step 3: 导出 PostgreSQL 数据（包含实体关系图谱）
                     self._report_progress("导出数据库", 20)
                     pg_exporter = PostgresExporter(str(temp_path))
                     pg_result = pg_exporter.run()
@@ -192,30 +191,16 @@ class ArchiveManager:
                         },
                     )
 
-                    # Step 4: 导出 Neo4j 数据 (55-75%)
-                    self._report_progress("导出知识图谱", 60)
-                    neo4j_exporter = Neo4jExporter(str(temp_path))
-                    neo4j_result = neo4j_exporter.run()
-                    if not neo4j_result.success:
-                        logger.warning(f"导出知识图谱部分失败: {neo4j_result.error}")
-                    self._report_progress(
-                        "知识图谱导出完成",
-                        75,
-                        {
-                            "nodes": neo4j_result.stats.get("node_count", 0),
-                            "relations": neo4j_result.stats.get("relation_count", 0),
-                        },
-                    )
-
-                    # Step 5: 生成元数据 (75-80%)
+                    # Step 4: 生成元数据
                     self._report_progress("生成元数据", 78)
+                    table_rows = pg_result.stats.get("table_rows", {})
                     manifest = self._create_manifest(
                         description=description,
                         stats=ArchiveStats(
-                            message_count=pg_result.stats.get("total_rows", 0),
-                            memory_count=pg_result.stats.get("tables_count", 0),
-                            entity_count=neo4j_result.stats.get("node_count", 0),
-                            relation_count=neo4j_result.stats.get("relation_count", 0),
+                            message_count=table_rows.get("message_list", 0),
+                            memory_count=table_rows.get("episodic_memory", 0),
+                            entity_count=table_rows.get("knowledge_entities", 0),
+                            relation_count=table_rows.get("knowledge_relations", 0),
                         ),
                     )
 
@@ -231,7 +216,7 @@ class ArchiveManager:
                         f.write(manifest.to_json())
                     self._report_progress("元数据生成完成", 80)
 
-                    # Step 6: 压缩打包 (80-95%)
+                    # Step 5: 压缩打包
                     self._report_progress("压缩存档", 85)
                     archive_path = (
                         self.archive_dir / f"{slot_name}{self.ARCHIVE_EXTENSION}"
@@ -391,64 +376,29 @@ class ArchiveManager:
                         raise ArchiveError(f"导入配置文件失败: {json_result.error}")
                     self._report_progress("配置文件恢复完成", 55)
 
-                    # Step 10: 并行导入 PostgreSQL 和 Neo4j 数据 (55-85%)
+                    # Step 10: 导入 PostgreSQL 数据（包含实体关系图谱）
                     self._report_progress("恢复数据库和知识图谱", 60)
-
-                    pg_result = [None]
-                    neo4j_result = [None]
-
-                    def import_postgres():
-                        pg_importer = PostgresImporter(str(temp_path))
-                        pg_result[0] = pg_importer.run()
-
-                    def import_neo4j():
-                        neo4j_importer = Neo4jImporter(str(temp_path))
-                        neo4j_result[0] = neo4j_importer.run()
-
-                    # 并行执行导入
-                    with ThreadPoolExecutor(max_workers=2) as executor:
-                        pg_future = executor.submit(import_postgres)
-                        neo4j_future = executor.submit(import_neo4j)
-
-                        # 等待完成
-                        pg_future.result()
-                        neo4j_future.result()
+                    pg_importer = PostgresImporter(str(temp_path))
+                    pg_result = pg_importer.run()
 
                     # 检查结果
-                    if not pg_result[0] or not pg_result[0].success:
+                    if not pg_result or not pg_result.success:
                         self._rollback_state(backup_info)
                         raise ArchiveError(
-                            f"导入数据库失败: {pg_result[0].error if pg_result[0] else '未知错误'}"
-                        )
-
-                    if not neo4j_result[0] or not neo4j_result[0].success:
-                        logger.warning(
-                            f"导入知识图谱部分失败: {neo4j_result[0].error if neo4j_result[0] else '未知错误'}"
+                            f"导入数据库失败: {pg_result.error if pg_result else '未知错误'}"
                         )
 
                     self._report_progress(
                         "数据库和知识图谱恢复完成",
                         85,
                         {
-                            "pg_tables": (
-                                pg_result[0].stats.get("tables_count", 0)
-                                if pg_result[0]
-                                else 0
+                            "pg_tables": pg_result.stats.get("tables_count", 0),
+                            "pg_rows": pg_result.stats.get("total_rows", 0),
+                            "entities": pg_result.stats.get("table_rows", {}).get(
+                                "knowledge_entities", 0
                             ),
-                            "pg_rows": (
-                                pg_result[0].stats.get("total_rows", 0)
-                                if pg_result[0]
-                                else 0
-                            ),
-                            "neo4j_nodes": (
-                                neo4j_result[0].stats.get("nodes", 0)
-                                if neo4j_result[0]
-                                else 0
-                            ),
-                            "neo4j_relations": (
-                                neo4j_result[0].stats.get("relations", 0)
-                                if neo4j_result[0]
-                                else 0
+                            "relations": pg_result.stats.get("table_rows", {}).get(
+                                "knowledge_relations", 0
                             ),
                         },
                     )
@@ -852,18 +802,15 @@ class ArchiveManager:
                 pg_exporter = PostgresExporter(str(temp_path))
                 pg_result = pg_exporter.run()
 
-                # 导出 Neo4j 数据
-                neo4j_exporter = Neo4jExporter(str(temp_path))
-                neo4j_result = neo4j_exporter.run()
-
                 # 生成元数据
+                table_rows = pg_result.stats.get("table_rows", {})
                 manifest = self._create_manifest(
                     description=description,
                     stats=ArchiveStats(
-                        message_count=pg_result.stats.get("total_rows", 0),
-                        memory_count=pg_result.stats.get("tables_count", 0),
-                        entity_count=neo4j_result.stats.get("node_count", 0),
-                        relation_count=neo4j_result.stats.get("relation_count", 0),
+                        message_count=table_rows.get("message_list", 0),
+                        memory_count=table_rows.get("episodic_memory", 0),
+                        entity_count=table_rows.get("knowledge_entities", 0),
+                        relation_count=table_rows.get("knowledge_relations", 0),
                     ),
                 )
 
@@ -1000,7 +947,7 @@ class ArchiveManager:
             cursor = conn.cursor()
 
             # 尝试从备份表恢复
-            for table in ["episodic_memory", "message_list", "state_list"]:
+            for table in PostgresImporter.TABLES:
                 backup_table = f"{table}_backup"
                 try:
                     # 检查备份表是否存在
@@ -1062,7 +1009,7 @@ class ArchiveManager:
 
             cursor = conn.cursor()
 
-            for table in ["episodic_memory", "message_list", "state_list"]:
+            for table in PostgresImporter.TABLES:
                 backup_table = f"{table}_backup"
                 try:
                     cursor.execute(f"DROP TABLE IF EXISTS {backup_table};")

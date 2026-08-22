@@ -1,12 +1,10 @@
 import json
 import logging
 import re
-import psycopg2
-from pgvector.psycopg2 import register_vector
 from core.event_bus import EventBus, Event
 from config.settings import settings
 from brain.llm_client import LLMClient
-from memory.neo4j_memory import Neo4jGraphMemory
+from memory.postgres_graph_memory import PostgresGraphMemory
 from memory.db_pool import get_connection
 
 logger = logging.getLogger(__name__)
@@ -21,18 +19,20 @@ class EntityExtractionMemory:
     1. 监听 memory.sleep 事件触发知识图谱整理
     2. 从 episodic_memory 数据库读取记忆
     3. 批量调用 LLM 提取实体和关系
-    4. 存储到 Neo4j 知识图谱
+    4. 存储到 PostgreSQL 实体关系表
     """
 
     def __init__(self, event_bus: EventBus):
         self.event_bus = event_bus
         self.llm_client = LLMClient()
-        self.enabled = settings.ENABLE_NEO4J
+        self.enabled = settings.ENABLE_GRAPH_MEMORY
         self.graph_memory = None
 
         if self.enabled:
-            self.graph_memory = Neo4jGraphMemory(event_bus)
-            self._subscribe_events()
+            self.graph_memory = PostgresGraphMemory(event_bus)
+            self.enabled = self.graph_memory.enabled
+            if self.enabled:
+                self._subscribe_events()
 
     def _subscribe_events(self):
         """订阅相关事件"""
@@ -53,7 +53,7 @@ class EntityExtractionMemory:
             整理结果统计 {"batches": int, "nodes": int, "edges": int}
         """
         if not self.enabled or not self.graph_memory:
-            logger.warning("Neo4j 未启用，跳过知识图谱整理")
+            logger.warning("PostgreSQL 图谱未启用，跳过知识图谱整理")
             return {"batches": 0, "nodes": 0, "edges": 0}
 
         try:
@@ -161,7 +161,7 @@ class EntityExtractionMemory:
         return "\n\n".join(summaries)
 
     def _extract_and_store(self, summaries: str) -> dict:
-        """从摘要中提取实体和关系并存储到 Neo4j
+        """从摘要中提取实体和关系并存储到 PostgreSQL
 
         Args:
             summaries: 记忆摘要文本

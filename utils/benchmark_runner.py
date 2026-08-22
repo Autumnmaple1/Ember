@@ -184,13 +184,11 @@ def reset_memory():
         reset_short_term,
         reset_state,
         reset_postgres,
-        reset_neo4j,
     )
 
     reset_short_term()
     reset_state()
     reset_postgres()
-    reset_neo4j()
 
 
 # ── 单组运行器 ─────────────────────────────────────────────────────────────────
@@ -318,7 +316,7 @@ def run_group(
 
 
 def run_stress_test(modules: dict, turns_base: list, n: int, cfg: dict) -> list[dict]:
-    """运行 N 轮（循环脚本），寻找 Token 增长天花板和 Neo4j 性能瓶颈。"""
+    """运行 N 轮（循环脚本），寻找 Token 增长天花板和图谱检索瓶颈。"""
     extended = []
     while len(extended) < n:
         extended.extend(turns_base)

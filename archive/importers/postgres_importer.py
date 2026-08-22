@@ -26,6 +26,8 @@ class PostgresImporter(BaseImporter):
         "episodic_memory",
         "message_list",
         "state_list",
+        "knowledge_entities",
+        "knowledge_relations",
     ]
 
     # 需要重建向量索引的表
@@ -110,7 +112,12 @@ class PostgresImporter(BaseImporter):
             conn = self._get_connection()
             imported_tables = []
             failed_tables = []
-            stats = {"tables_count": 0, "total_rows": 0, "indexes_rebuilt": 0}
+            stats = {
+                "tables_count": 0,
+                "total_rows": 0,
+                "indexes_rebuilt": 0,
+                "table_rows": {},
+            }
 
             try:
                 # 先清空所有表（无论存档中是否有数据文件）
@@ -124,6 +131,7 @@ class PostgresImporter(BaseImporter):
                             imported_tables.append(table)
                             stats["tables_count"] += 1
                             stats["total_rows"] += result.get("rows", 0)
+                            stats["table_rows"][table] = result.get("rows", 0)
                         else:
                             failed_tables.append(
                                 {"table": table, "error": result.get("error")}
@@ -223,22 +231,33 @@ class PostgresImporter(BaseImporter):
             with open(sql_file, "r", encoding="utf-8") as f:
                 sql_content = f.read()
 
-            # 尝试使用 COPY 命令 (更快)
-            if self._try_copy_import(conn, cursor, table_name, sql_content):
-                cursor.execute(f"SELECT count(*) FROM {table_name}")
-                row_count = cursor.fetchone()[0]
-                cursor.close()
-                self.logger.info(f"已导入表 (COPY): {table_name}, 共 {row_count} 行")
-                return {"success": True, "rows": row_count}
+            # 存档内只允许执行当前白名单表的 INSERT。直接交给 PostgreSQL
+            # 解析，可以正确恢复 JSONB、TEXT[]、时间戳和 vector 等类型。
+            import re
 
-            # COPY 不可用，使用批量 INSERT
-            row_count = self._batch_insert(cursor, table_name, sql_content)
+            row_count = 0
+            insert_pattern = re.compile(
+                r'^INSERT\s+INTO\s+'
+                r'(?:(?:"?public"?)\.)?'
+                r'"?([A-Za-z_][A-Za-z0-9_]*)"?\s',
+                re.IGNORECASE,
+            )
+            for statement in self._parse_sql_statements(sql_content):
+                match = insert_pattern.match(statement)
+                if not match:
+                    continue
+                if match.group(1) != table_name:
+                    raise ValueError(
+                        f"存档表名不匹配: 期望 {table_name}, 实际 {match.group(1)}"
+                    )
+                cursor.execute(statement)
+                row_count += 1
 
             # 即使没有数据也要提交事务
             conn.commit()
 
             cursor.close()
-            self.logger.info(f"已导入表 (批量INSERT): {table_name}, 共 {row_count} 行")
+            self.logger.info(f"已导入表: {table_name}, 共 {row_count} 行")
             return {"success": True, "rows": row_count}
 
         except Exception as e:

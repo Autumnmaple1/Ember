@@ -45,7 +45,7 @@
 
 ### 7. 💾 存档系统
 - **完整存档**：保存角色的完整状态，包括 PAD 情感、当前情境、内心独白、目标等。
-- **记忆备份**：导出 PostgreSQL 中的情景记忆、对话历史，以及 Neo4j 知识图谱中的实体关系。
+- **记忆备份**：统一导出 PostgreSQL 中的情景记忆、对话历史、实体和关系。
 - **快速存读**：一键快速存档/读档，方便保存重要时刻或回溯剧情。
 - **自动备份**：读档前自动备份当前状态，防止误操作丢失进度。
 - **画廊式管理**：前端提供直观的存档卡片界面，支持创建、加载、删除存档。
@@ -62,11 +62,11 @@
 - **`core/`**: 驱动中心。包含事件总线、心跳时钟及逻辑时间模拟。
 - **`brain/`**: 认知中心。负责意图判断、记忆调度、LLM 流式交互逻辑、TTS 语音合成。
 - **`persona/`**: 灵魂中心。管理 PAD 状态机，根据交互与时间流逝推演角色心境变化。
-- **`memory/`**: 存储中心。结合 Redis-like 短期记忆、pgvector 长期向量存储、Neo4j 知识图谱。
+- **`memory/`**: 存储中心。结合文件短期记忆、pgvector 长期向量存储和 PostgreSQL 实体关系图谱。
   - `short_term.py`: 短期记忆管理
   - `episodic_memory.py`: 情景记忆存储
   - `db_memory.py`: PostgreSQL 数据持久化
-  - `neo4j_memory.py`: 知识图谱存储
+  - `postgres_graph_memory.py`: PostgreSQL 实体关系图谱存储
   - `entity_extraction.py`: 实体提取与关系构建
   - `memory_process.py`: 海马体记忆提炼
 - **`tools/`**: 工具系统。提供 LLM 可调用的工具接口，支持插件化扩展。
@@ -82,8 +82,8 @@
 - **`archive/`**: 存档系统。提供完整的存档创建、加载、管理功能。
   - `manager.py`: 存档管理器，协调导入导出流程
   - `models.py`: 存档数据模型（Manifest、Slot、Stats）
-  - `exporters/`: 导出器（JSON配置、PostgreSQL数据、Neo4j图谱）
-  - `importers/`: 导入器（支持批量导入、并行恢复）
+  - `exporters/`: 导出器（JSON 配置和 PostgreSQL 数据）
+  - `importers/`: 导入器（JSON 配置和 PostgreSQL 数据）
   - `utils/`: 工具函数（压缩、校验、版本兼容）
 - **`frontend/`**: 前端呈现。基于 React + Vite，集成 Live2D 虚拟形象、状态雷达图、语音播放等功能。
 
@@ -101,7 +101,7 @@
 ### 1. 环境准备
 - **Python 3.11** (推荐使用 Conda 管理环境)
 - **Node.js 18+** (前端运行环境)
-- **Docker Desktop** (用于启动 PostgreSQL + pgvector + Neo4j 数据库)
+- **Docker Desktop** (用于启动 PostgreSQL + pgvector 数据库)
 
 ### 2. 项目配置
 
@@ -137,16 +137,13 @@ npm install recharts
 ```
 
 #### 第四步：启动数据库
-项目依赖 PostgreSQL (pgvector) 和 Neo4j 知识图谱。使用 Docker 快速启动：
+项目的对话、向量记忆和实体关系图谱统一存储在 PostgreSQL（pgvector）中。使用 Docker 快速启动：
 ```bash
 # 回到项目根目录
 cd ..
 docker-compose up -d
 ```
-启动后可访问：
-- **PostgreSQL**: `localhost:5432` (向量存储)
-- **Neo4j Browser**: `http://localhost:7474` (知识图谱可视化)
-- **Neo4j Bolt**: `bolt://localhost:7687`
+启动后 PostgreSQL 位于 `localhost:5432`，同时承载向量记忆和实体关系图谱。
 
 ### 4. 启动服务
 
@@ -241,7 +238,7 @@ Ember 提供了完整的存档系统，让你可以保存角色的当前状态�
 | 功能 | 说明 |
 |------|------|
 | **完整存档** | 保存 PAD 情感状态、当前情境、内心独白、目标等 |
-| **记忆备份** | 导出 PostgreSQL 情景记忆、对话历史，以及 Neo4j 知识图谱 |
+| **记忆备份** | 导出 PostgreSQL 情景记忆、对话历史、实体和关系 |
 | **快速存读** | 一键快速存档/读档，使用固定槽位 `quick_save` |
 | **自动备份** | 读档前自动备份当前状态，防止误操作丢失进度 |
 | **版本兼容** | 存档包含版本信息，跨版本加载时会进行兼容性检查 |
@@ -258,7 +255,8 @@ Ember 提供了完整的存档系统，让你可以保存角色的当前状态�
 ├── episodic_memory.sql # 情景记忆数据
 ├── message_list.sql   # 对话历史
 ├── state_list.sql     # 状态变更历史
-└── neo4j.cypher       # 知识图谱数据
+├── knowledge_entities.sql  # 图谱实体
+└── knowledge_relations.sql # 图谱关系
 ```
 
 ### 前端操作

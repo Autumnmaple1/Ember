@@ -8,6 +8,7 @@ import subprocess
 import os
 import logging
 import time
+import json
 from typing import List, Optional
 from pathlib import Path
 
@@ -28,6 +29,8 @@ class PostgresExporter(BaseExporter):
         "episodic_memory",
         "message_list",
         "state_list",
+        "knowledge_entities",
+        "knowledge_relations",
     ]
 
     # 分批导出配置
@@ -107,7 +110,7 @@ class PostgresExporter(BaseExporter):
         try:
             exported_tables = []
             failed_tables = []
-            stats = {"tables_count": 0, "total_rows": 0}
+            stats = {"tables_count": 0, "total_rows": 0, "table_rows": {}}
 
             for table in self.TABLES:
                 result = self._export_table(table)
@@ -115,6 +118,7 @@ class PostgresExporter(BaseExporter):
                     exported_tables.append(table)
                     stats["tables_count"] += 1
                     stats["total_rows"] += result.get("rows", 0)
+                    stats["table_rows"][table] = result.get("rows", 0)
                 else:
                     failed_tables.append({"table": table, "error": result.get("error")})
 
@@ -261,7 +265,25 @@ class PostgresExporter(BaseExporter):
             cursor.execute(f"SELECT * FROM {table_name} LIMIT 0")
             columns = [desc[0] for desc in cursor.description]
 
-            # 分批导出
+            # 分批导出。由 psycopg2 负责生成 SQL 字面量，确保 JSONB、数组、
+            # 时间戳和字符串都能被 PostgreSQL 无损读回。
+            from psycopg2.extras import Json
+
+            placeholders = ", ".join(["%s"] * len(columns))
+            columns_str = ", ".join(columns)
+            insert_template = (
+                f"INSERT INTO {table_name} ({columns_str}) "
+                f"VALUES ({placeholders});"
+            )
+
+            def adapt_value(value):
+                if isinstance(value, dict):
+                    return Json(
+                        value,
+                        dumps=lambda obj: json.dumps(obj, ensure_ascii=False),
+                    )
+                return value
+
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(f"-- Table: {table_name}\n")
                 f.write(f"-- Rows: {total_rows}\n")
@@ -279,12 +301,11 @@ class PostgresExporter(BaseExporter):
                     rows = cursor.fetchall()
 
                     for row in rows:
-                        values = self._format_row_values(row)
-                        columns_str = ", ".join(columns)
-                        values_str = ", ".join(values)
-                        f.write(
-                            f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str});\n"
-                        )
+                        adapted_row = tuple(adapt_value(value) for value in row)
+                        statement = cursor.mogrify(
+                            insert_template, adapted_row
+                        ).decode(conn.encoding or "utf-8")
+                        f.write(statement + "\n")
                         exported_rows += 1
 
                     offset += self.BATCH_SIZE

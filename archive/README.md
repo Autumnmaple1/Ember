@@ -100,7 +100,9 @@ data/archives/
 ├── chat_memory.json      # 短期记忆
 ├── episodic_memory.sql   # 情景记忆
 ├── message_list.sql      # 消息历史
-└── neo4j.cypher          # 知识图谱
+├── state_list.sql        # 状态历史
+├── knowledge_entities.sql  # 图谱实体
+└── knowledge_relations.sql # 图谱关系
 ```
 
 ## 代码示例

@@ -54,4 +54,4 @@ def mock_env(monkeypatch):
     monkeypatch.setenv("PG_USER", "test")
     monkeypatch.setenv("PG_PASSWORD", "test")
     monkeypatch.setenv("PG_DB", "test_db")
-    monkeypatch.setenv("ENABLE_NEO4J", "False")
+    monkeypatch.setenv("ENABLE_GRAPH_MEMORY", "False")
