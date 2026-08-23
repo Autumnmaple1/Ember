@@ -42,6 +42,9 @@ class Settings:
         api_key=os.getenv("IMAGE_GEN_API_KEY", ""),
         base_url=os.getenv("IMAGE_GEN_BASE_URL", ""),
     )
+    ENABLE_BACKGROUND_GENERATION = (
+        os.getenv("ENABLE_BACKGROUND_GENERATION", "true").lower() == "true"
+    )
 
     HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "10"))
 

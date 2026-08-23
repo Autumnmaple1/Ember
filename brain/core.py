@@ -159,7 +159,10 @@ class Brain:
                         except Exception as e:
                             logger.error(f"[Location State] Error generating background: {e}")
 
-                    threading.Thread(target=_update_location_bg).start()
+                    if settings.ENABLE_BACKGROUND_GENERATION:
+                        threading.Thread(target=_update_location_bg).start()
+                    else:
+                        logger.info("[Location State] Background generation is disabled")
                 else:
                     if settings.STATE.get("当前行为") != new_action:
                         self.state_manager._update_state({"当前行为": new_action}, logical_now=self.event_bus.logical_now)
