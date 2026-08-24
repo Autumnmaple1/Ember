@@ -43,7 +43,7 @@ python run_tests.py -x
 | `test_thread_safety.py` | 线程池复用、并发处理标志、锁机制 | 5 |
 | `test_tag_utils.py` | thought 标签修复、内容提取 | 10 |
 | `test_integration.py` | 事件总线、逻辑时间、内存集成 | 9 |
-| `test_security.py` | CORS、SQL注入、Cypher注入、密钥保护 | 6 |
+| `test_security.py` | CORS、SQL 注入、图谱查询参数化、密钥保护 | 6 |
 | `test_heartbeat.py` | 心跳启动/停止、事件发布 | 6 |
 | `test_config.py` | 环境变量、配置加载 | 6 |
 | `test_llm_client.py` | API 调用、流式响应、错误处理 | 9 |

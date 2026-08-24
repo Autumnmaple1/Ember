@@ -42,6 +42,9 @@ class Settings:
         api_key=os.getenv("IMAGE_GEN_API_KEY", ""),
         base_url=os.getenv("IMAGE_GEN_BASE_URL", ""),
     )
+    ENABLE_BACKGROUND_GENERATION = (
+        os.getenv("ENABLE_BACKGROUND_GENERATION", "true").lower() == "true"
+    )
 
     HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "10"))
 
@@ -87,7 +90,7 @@ class Settings:
 
     # 空闲超时时间：配置值为真实世界秒数，内部乘以加速因子转换为系统时间
     STATE_IDLE_MIN_TIMEOUT = int(os.getenv("STATE_IDLE_MIN_TIMEOUT", "30")) * int(TIME_ACCEL_FACTOR)
-    STATE_IDLE_MAX_TIMEOUT = int(os.getenv("STATE_IDLE_MAX_TIMEOUT", "3600")) * int(TIME_ACCEL_FACTOR)
+    STATE_IDLE_MAX_TIMEOUT = int(os.getenv("STATE_IDLE_MAX_TIMEOUT", "1800")) * int(TIME_ACCEL_FACTOR)
 
     IDLE_STATE_UPDATE_PROMPT = PROMPTS.get("idle_state_update_prompt", "")
     IDLE_SPEAKING_UPDATE_PROMPT = PROMPTS.get("idle_speaking_update_prompt", "")
@@ -111,11 +114,9 @@ class Settings:
     PG_PASSWORD = os.getenv("PG_PASSWORD", "your_password")
     PG_DB = os.getenv("PG_DB", "ember_db")
 
-    NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-    NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-    NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "your_password")
-    NEO4J_DB = os.getenv("NEO4J_DB", "neo4j")
-    ENABLE_NEO4J = os.getenv("ENABLE_NEO4J", "True").lower() == "true"
+    ENABLE_GRAPH_MEMORY = (
+        os.getenv("ENABLE_GRAPH_MEMORY", "True").lower() == "true"
+    )
 
     MEMORY_JUDGE_PROMPT = PROMPTS.get("memory_judge_prompt", "")
     MEMORY_ENCODING_PROMPT = PROMPTS.get("memory_encoding_prompt", "")

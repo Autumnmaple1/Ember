@@ -10,7 +10,6 @@ numpy>=1.26.0
 pgvector>=0.2.5
 json_repair>=0.28.0
 edge-tts>=7.2.7
-neo4j==5.20.0
 ddgs
 
 # 测试依赖

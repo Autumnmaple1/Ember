@@ -9,8 +9,7 @@ Ember 记忆清除工具 — 白板测试专用
 选择性重置:
   python utils/reset_memory.py --short-term   # 仅清除对话历史
   python utils/reset_memory.py --state        # 仅重置情绪状态
-  python utils/reset_memory.py --postgres     # 仅清空 PostgreSQL 三张表
-  python utils/reset_memory.py --neo4j        # 仅清空 Neo4j 图谱
+  python utils/reset_memory.py --postgres     # 清空 PostgreSQL 记忆与实体关系表
 
 可选扩展:
   python utils/reset_memory.py --all --audio --logs -y
@@ -107,7 +106,7 @@ def reset_state(dry_run: bool = False) -> bool:
 
 
 def reset_postgres(dry_run: bool = False) -> bool:
-    """TRUNCATE PostgreSQL 中的三张表（episodic_memory, message_list, state_list）。"""
+    """清空 PostgreSQL 中的对话、情景记忆和实体关系表。"""
     try:
         import psycopg2
         from config.settings import settings
@@ -131,7 +130,14 @@ def reset_postgres(dry_run: bool = False) -> bool:
         _print_result("PostgreSQL", f"连接失败（数据库可能未启动）: {e}", ok=False)
         return False
 
-    tables = ["episodic_memory", "message_list", "state_list"]
+    # 先列关系表，再列实体表，顺序也便于 dry-run 输出理解依赖关系。
+    tables = [
+        "knowledge_relations",
+        "knowledge_entities",
+        "episodic_memory",
+        "message_list",
+        "state_list",
+    ]
     counts: dict[str, int] = {}
 
     try:
@@ -163,49 +169,6 @@ def reset_postgres(dry_run: bool = False) -> bool:
         return False
     finally:
         conn.close()
-
-
-def reset_neo4j(dry_run: bool = False) -> bool:
-    """DETACH DELETE Neo4j 图谱中的全部节点和关系。"""
-    try:
-        from neo4j import GraphDatabase
-        from config.settings import settings
-    except ImportError as e:
-        _print_result("Neo4j", f"依赖缺失: {e}  →  {sys.executable}", ok=False)
-        return False
-
-    try:
-        driver = GraphDatabase.driver(
-            settings.NEO4J_URI,
-            auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD),
-        )
-        driver.verify_connectivity()
-    except Exception as e:
-        _print_result("Neo4j", f"连接失败（数据库可能未启动）: {e}", ok=False)
-        return False
-
-    db_name = getattr(settings, "NEO4J_DB", "neo4j")
-
-    try:
-        with driver.session(database=db_name) as session:
-            # 先统计当前节点/关系数
-            node_count = session.run("MATCH (n) RETURN COUNT(n) AS c").single()["c"]
-            rel_count  = session.run("MATCH ()-[r]->() RETURN COUNT(r) AS c").single()["c"]
-
-            if dry_run:
-                _print_result("Neo4j", f"[预览] 将删除 {node_count} 个节点，{rel_count} 条关系")
-                return True
-
-            session.run("MATCH (n) DETACH DELETE n")
-
-        _print_result("Neo4j", f"已删除 {node_count} 个节点，{rel_count} 条关系")
-        return True
-
-    except Exception as e:
-        _print_result("Neo4j", f"操作失败: {e}", ok=False)
-        return False
-    finally:
-        driver.close()
 
 
 def reset_audio(dry_run: bool = False) -> bool:
@@ -274,7 +237,6 @@ def main() -> None:
     parser.add_argument("-s", "--short-term", action="store_true", help="清除短期对话历史")
     parser.add_argument(      "--state",      action="store_true", help="重置情绪状态到出厂默认")
     parser.add_argument("-p", "--postgres",   action="store_true", help="清空 PostgreSQL 长期记忆")
-    parser.add_argument("-n", "--neo4j",      action="store_true", help="清空 Neo4j 知识图谱")
     parser.add_argument(      "--audio",      action="store_true", help="删除 TTS 音频缓存（可选）")
     parser.add_argument(      "--logs",       action="store_true", help="清空系统日志（可选）")
     parser.add_argument("-y", "--yes",        action="store_true", help="跳过确认提示")
@@ -283,11 +245,10 @@ def main() -> None:
     args = parser.parse_args()
 
     # 确定要执行的操作
-    explicit = args.short_term or args.state or args.postgres or args.neo4j
+    explicit = args.short_term or args.state or args.postgres
     do_short_term = args.all or args.short_term or not explicit
     do_state      = args.all or args.state      or not explicit
     do_postgres   = args.all or args.postgres   or not explicit
-    do_neo4j      = args.all or args.neo4j      or not explicit
     do_audio      = args.audio
     do_logs       = args.logs
 
@@ -301,10 +262,9 @@ def main() -> None:
     print("将执行以下操作:")
     if do_short_term: print("  [1] 短期记忆  (chat_memory.json + chat_history.log)")
     if do_state:      print("  [2] 状态快照  (state.json → state_default.json)")
-    if do_postgres:   print("  [3] PostgreSQL (episodic_memory, message_list, state_list)")
-    if do_neo4j:      print("  [4] Neo4j      (所有节点与关系)")
-    if do_audio:      print("  [5] TTS 音频   (data/audio/*.mp3)")
-    if do_logs:       print("  [6] 系统日志   (data/logs/system.log)")
+    if do_postgres:   print("  [3] PostgreSQL (对话、情景记忆、实体和关系)")
+    if do_audio:      print("  [4] TTS 音频   (data/audio/*.mp3)")
+    if do_logs:       print("  [5] 系统日志   (data/logs/system.log)")
     print()
 
     # ── 确认提示
@@ -325,7 +285,6 @@ def main() -> None:
     if do_short_term: results.append(reset_short_term(dry_run))
     if do_state:      results.append(reset_state(dry_run))
     if do_postgres:   results.append(reset_postgres(dry_run))
-    if do_neo4j:      results.append(reset_neo4j(dry_run))
     if do_audio:      results.append(reset_audio(dry_run))
     if do_logs:       results.append(reset_logs(dry_run))
 

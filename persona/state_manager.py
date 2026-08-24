@@ -399,10 +399,20 @@ class StateManager:
         # 不再直接调用 hippocampus.load_memory，改为让 LLM 通过工具主动获取记忆
         # 这样与对话系统的记忆加载方式保持一致
 
+        # 把真实对话打包成带说话人标注的转录文本，防止状态模型混淆说话人身份。
+        history_lines = []
+        for msg in history:
+            role_name = "对方" if msg.get("role") == "user" else "依鸣(你自己)"
+            content = str(msg.get("content", "")).strip()
+            if content:
+                history_lines.append(f"{role_name}: {content}")
+        history_text = "\n".join(history_lines) if history_lines else "（无）"
+
         user_content = f"""【环境变更推断任务】
 距离上次互动已经过去 {info['idle_duration']} 分钟，当前时间为 {info['current_time']}。
 历史状态：{info['old_state']}
-[近期对话记录]:\n{json.dumps(history, ensure_ascii=False)}
+[近期对话记录]:
+{history_text}
 """
 
         prompt = user_content + "\n\n" + settings.IDLE_STATE_UPDATE_PROMPT
@@ -453,10 +463,13 @@ class StateManager:
                     self.is_sleeping = False
 
                 if impulse.get("should_speak", False):
+                    idle_duration_seconds = max(
+                        0.0, logical_now - self.last_interaction_logical_time
+                    )
                     self.event_bus.publish(
                         Event(
                             name="idle_speak",
-                            data={},
+                            data={"idle_duration_seconds": idle_duration_seconds},
                         )
                     )
 

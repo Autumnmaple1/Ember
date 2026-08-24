@@ -14,7 +14,7 @@ if %errorlevel% neq 0 (
     exit /b %errorlevel%
 )
 
-REM 2. 启动容器 (Postgres/Neo4j等) - 如果你使用了 docker
+REM 2. 启动 PostgreSQL (pgvector) 容器
 if exist "docker-compose.yml" (
     echo [INFO] 正在后台启动 Docker 容器...
     docker-compose up -d

@@ -38,16 +38,15 @@ class TestSQLInjection:
         assert "%s" in content or "execute" in content
 
 
-class TestCypherInjection:
-    """测试 Cypher 注入防护"""
+class TestGraphSQLInjection:
+    """测试图谱 SQL 注入防护"""
 
-    def test_neo4j_uses_parameters(self):
-        """测试 Neo4j 查询使用参数"""
-        with open("memory/neo4j_memory.py", "r", encoding="utf-8") as f:
+    def test_postgres_graph_uses_parameters(self):
+        """测试 PostgreSQL 图谱查询使用参数"""
+        with open("memory/postgres_graph_memory.py", "r", encoding="utf-8") as f:
             content = f.read()
 
-        # 应该使用 $param 参数化
-        assert "$" in content
+        assert "%s" in content
 
 
 class TestSecrets:
