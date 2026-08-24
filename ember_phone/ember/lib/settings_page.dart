@@ -29,6 +29,7 @@ class _EmberSettingsPageState extends State<EmberSettingsPage> {
     'model',
     'character_name',
     'user_name',
+    'persona',
     'small_base_url',
     'small_model',
     'embedding_base_url',
@@ -138,7 +139,9 @@ class _EmberSettingsPageState extends State<EmberSettingsPage> {
     setState(() => _saving = true);
     final values = <String, dynamic>{
       for (final field in _textFields)
-        field: _controller(field).text.trim(),
+        if (field != 'persona' ||
+            _controller(field).text.trim().isNotEmpty)
+          field: _controller(field).text.trim(),
       'state_updates_enabled': _stateUpdatesEnabled,
       'image_generation_enabled': _imageGenerationEnabled,
       'graph_memory_enabled': _graphMemoryEnabled,
@@ -190,6 +193,12 @@ class _EmberSettingsPageState extends State<EmberSettingsPage> {
               _field('model', '对话模型'),
               _field('character_name', '角色名'),
               _field('user_name', '用户称呼'),
+              _field(
+                'persona',
+                '人设（性格/背景/说话风格，留空使用默认）',
+                minLines: 4,
+                maxLines: 6,
+              ),
               _field(
                 'api_key',
                 '对话 API Key',
