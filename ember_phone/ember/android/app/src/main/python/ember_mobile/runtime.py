@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 from pathlib import Path
 import random
@@ -15,7 +16,9 @@ from .event_bus import Event, EventBus
 from .heartbeat import Heartbeat
 from .memory_db import MobileMemoryDatabase
 from .memory_manager import MobileMemoryManager
-from .state_store import MobileStateStore
+from .llm_client import MobileLLMClient
+from .prompt_store import CORE_PERSONA, PERSONA_SYSTEM_RULES
+from .state_store import DEFAULT_STATE, MobileStateStore
 from .state_evolution import MobileStateEvolution
 from .tool_system import create_mobile_tool_processor
 
@@ -45,6 +48,7 @@ class MobileEmberRuntime:
         self._dialogue_active = threading.Event()
         self._idle_timeout = 40.0
         self._is_sleeping = False
+        self._external_idle_driver = False
 
     def start(self, data_dir: str, cache_dir: str, event_callback=None) -> str:
         with self._lock:
@@ -202,6 +206,9 @@ class MobileEmberRuntime:
             )
         if not state_store.event_bus.time_flow_enabled:
             return
+        # 计划任务模式下由 Android AlarmManager 驱动空闲更新，心跳不再触发。
+        if self._external_idle_driver:
+            return
         if self._dialogue_active.is_set():
             return
         # The configured idle timeout is expressed in real-world seconds,
@@ -219,7 +226,7 @@ class MobileEmberRuntime:
             return
         self._idle_cancel.clear()
         threading.Thread(
-            target=self._run_idle_evolution,
+            target=self._run_idle_evolution_thread,
             name="ember-mobile-idle-evolution",
             daemon=True,
         ).start()
@@ -316,6 +323,57 @@ class MobileEmberRuntime:
                 self._idle_timeout = min(self._idle_timeout * 1.5, maximum)
         finally:
             self._idle_cancel.clear()
+
+    def _run_idle_evolution_thread(self) -> None:
+        try:
+            self._run_idle_evolution()
+        finally:
+            self._idle_lock.release()
+
+    def set_external_idle_driver_json(self, enabled: bool) -> str:
+        with self._lock:
+            self._external_idle_driver = bool(enabled)
+        return json.dumps({"external_idle_driver": self._external_idle_driver})
+
+    def _next_idle_delay(self) -> float | None:
+        state_store = self._state_store
+        if not state_store or not state_store.event_bus.time_flow_enabled:
+            return None
+        factor = state_store.event_bus.time_accel_factor
+        if factor <= 0:
+            return None
+        return max(
+            0.0,
+            self._idle_timeout - state_store.idle_seconds / factor,
+        )
+
+    def next_idle_delay_json(self) -> str:
+        delay = self._next_idle_delay()
+        if delay is None:
+            return json.dumps(None)
+        return json.dumps(round(delay, 1))
+
+    def run_idle_update_json(self) -> str:
+        with self._lock:
+            state_store = self._state_store
+        if not state_store:
+            return json.dumps({"started": False, "error": "runtime not running"})
+        if self._dialogue_active.is_set():
+            return json.dumps({"started": False, "reason": "dialogue_active"})
+        if not self._idle_lock.acquire(blocking=False):
+            return json.dumps({"started": False, "reason": "busy"})
+        try:
+            self._run_idle_evolution()
+            delay = self._next_idle_delay()
+            return json.dumps(
+                {
+                    "started": True,
+                    "next_delay": None if delay is None else round(delay, 1),
+                }
+            )
+        except Exception as error:
+            return json.dumps({"started": False, "error": str(error)})
+        finally:
             self._idle_lock.release()
 
     def status(self) -> dict[str, Any]:
@@ -336,6 +394,100 @@ class MobileEmberRuntime:
 
     def status_json(self) -> str:
         return json.dumps(self.status(), ensure_ascii=False)
+
+    def get_initial_setup_json(self) -> str:
+        with self._lock:
+            config = (
+                self._config_store.private_value()
+                if self._config_store
+                else {}
+            )
+            state_store = self._state_store
+            state = (
+                deepcopy(state_store.current_state)
+                if state_store
+                else deepcopy(DEFAULT_STATE)
+            )
+        return json.dumps(
+            {
+                "onboarding_completed": bool(
+                    config.get("onboarding_completed", False)
+                ),
+                "character_name": config.get("character_name", "依鸣"),
+                "user_name": config.get("user_name", "用户"),
+                "persona": config.get("persona", ""),
+                "state": state,
+            },
+            ensure_ascii=False,
+        )
+
+    def save_initial_setup_json(
+        self,
+        config_json: str,
+        state_json: str,
+    ) -> str:
+        with self._lock:
+            if (
+                not self._config_store
+                or not self._state_store
+                or not self._archive_manager
+            ):
+                raise RuntimeError("Ember runtime is not running")
+            config_values = json.loads(config_json)
+            state_values = json.loads(state_json)
+            if not isinstance(config_values, dict) or not isinstance(
+                state_values, dict
+            ):
+                raise ValueError("设置数据格式错误")
+            updated = self._config_store.update_app_config(config_values)
+            snapshot = self._state_store.update_fields(state_values)
+            self._archive_manager.replace_initial_state(
+                deepcopy(self._state_store.current_state)
+            )
+        return json.dumps(
+            {"config": updated, "snapshot": snapshot},
+            ensure_ascii=False,
+        )
+
+    def generate_initial_state_json(
+        self,
+        persona: str,
+        character_name: str,
+        scene_hint: str,
+    ) -> str:
+        with self._lock:
+            if not self._config_store:
+                raise RuntimeError("Ember runtime is not running")
+            config = self._config_store.private_value()
+        effective_persona = (persona or "").strip() or CORE_PERSONA
+        if (persona or "").strip():
+            effective_persona = (
+                f"{effective_persona}\n\n{PERSONA_SYSTEM_RULES}"
+            )
+        prompt = (
+            "你是 Ember 的初始存档生成器。请根据以下人设，为角色的“初始状态”"
+            "生成一段开场设定。\n"
+            f"角色名：{character_name or '依鸣'}\n"
+            f"人设：{effective_persona}\n"
+            f"场景提示（可选）：{scene_hint or '无'}\n"
+            "只输出纯 JSON，包含字段：P、A、D、客观情境、内心活动、"
+            "近期目标、近期综合轨迹、当前位置、当前行为。\n"
+            "要求：客观情境/内心活动/近期目标/近期综合轨迹各不超过 250 字；"
+            "只描述角色自己的环境与内心，严禁虚构任何用户言行；"
+            "近期综合轨迹用 -> 连接关键事件；"
+            "当前行为要匹配当前位置（例如在图书馆则是“自习/看书”）。"
+        )
+        raw = MobileLLMClient.chat(
+            config,
+            [
+                {"role": "system", "content": effective_persona},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        parsed = MobileMemoryManager._extract_json(raw)
+        if not isinstance(parsed, dict):
+            raise ValueError("初始存档生成结果不是 JSON 对象")
+        return json.dumps(parsed, ensure_ascii=False)
 
     def memory_overview_json(self) -> str:
         with self._lock:

@@ -7,7 +7,12 @@ from typing import Any
 from .chat_memory import MobileChatMemory
 from .config_store import MobileConfigStore
 from .llm_client import MobileLLMClient
-from .prompt_store import CORE_PERSONA, STATE_UPDATE_PROMPT, IDLE_STATE_UPDATE_PROMPT
+from .prompt_store import (
+    CORE_PERSONA,
+    IDLE_STATE_UPDATE_PROMPT,
+    PERSONA_SYSTEM_RULES,
+    STATE_UPDATE_PROMPT,
+)
 from .state_store import MobileStateStore
 
 
@@ -89,6 +94,18 @@ class MobileStateEvolution:
         )
         return self._tool_processor.remove_calls(response)
 
+    def _core_persona(self) -> str:
+        try:
+            persona = str(
+                self._config_store.private_value().get("persona", "") or ""
+            ).strip()
+        except Exception:
+            persona = ""
+        if not persona:
+            return CORE_PERSONA
+        # 自定义人设时保留 PAD 情感模型等系统机制部分。
+        return f"{persona}\n\n{PERSONA_SYSTEM_RULES}"
+
     def update_after_dialogue(self) -> dict[str, Any] | None:
         public_config = self._config_store.public_value()
         if not public_config.get("state_updates_enabled", True):
@@ -115,7 +132,7 @@ class MobileStateEvolution:
                 }
             )
         messages = [
-            {"role": "system", "content": CORE_PERSONA},
+            {"role": "system", "content": self._core_persona()},
             {
                 "role": "user",
                 "content": (
@@ -167,7 +184,7 @@ class MobileStateEvolution:
             f"{history_text}\n"
         )
         messages = [
-            {"role": "system", "content": CORE_PERSONA},
+            {"role": "system", "content": self._core_persona()},
             {
                 "role": "user",
                 "content": user_content + "\n\n" + IDLE_STATE_UPDATE_PROMPT,

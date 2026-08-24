@@ -178,6 +178,46 @@ class MobileArchiveManager:
         snapshot = self._state_store.restore(state, checkpoint)
         return {"archive": self._slot(path, manifest), "snapshot": snapshot}
 
+    def replace_initial_state(self, state: dict[str, Any]) -> dict[str, Any]:
+        """用自定义的初始设定覆盖“初始存档”，重置时恢复到这套设定。"""
+        path = self._archive_path(self.INITIAL_ARCHIVE_ID)
+        if not path.is_file():
+            raise ValueError("初始存档不存在")
+        with zipfile.ZipFile(path, "r") as archive:
+            manifest = json.loads(archive.read("manifest.json"))
+            checkpoint = json.loads(archive.read("checkpoint.json"))
+            database_bytes = archive.read("memory.sqlite3")
+        manifest["preview"] = {
+            "location": state.get("当前位置", ""),
+            "action": state.get("当前行为", ""),
+            "P": state.get("P", 5),
+            "A": state.get("A", 5),
+            "D": state.get("D", 5),
+        }
+        with tempfile.TemporaryDirectory(dir=str(self._cache_dir)) as temporary:
+            database_path = Path(temporary) / "memory.sqlite3"
+            database_path.write_bytes(database_bytes)
+            with zipfile.ZipFile(
+                path,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+                compresslevel=6,
+            ) as archive:
+                archive.writestr(
+                    "manifest.json",
+                    json.dumps(manifest, ensure_ascii=False, indent=2),
+                )
+                archive.writestr(
+                    "state.json",
+                    json.dumps(state, ensure_ascii=False, indent=2),
+                )
+                archive.writestr(
+                    "checkpoint.json",
+                    json.dumps(checkpoint, ensure_ascii=False, indent=2),
+                )
+                archive.write(database_path, "memory.sqlite3")
+        return manifest
+
     def delete(self, archive_id: str) -> dict[str, Any]:
         if archive_id.strip().lower() == self.INITIAL_ARCHIVE_ID:
             raise ValueError("初始存档不能删除")

@@ -4,6 +4,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <application
         android:label="Ember"
@@ -45,6 +46,14 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Runs the local Ember companion runtime while continuous mode is enabled." />
         </service>
+
+        <receiver
+            android:name=".IdleUpdateReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.ember.companion.action.IDLE_UPDATE" />
+            </intent-filter>
+        </receiver>
 
     </application>
     <!-- Required to query activities that can process text, see:

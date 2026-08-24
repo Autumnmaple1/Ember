@@ -12,7 +12,11 @@ from .event_bus import Event, EventBus
 from .llm_client import MobileLLMClient
 from .memory_manager import MobileMemoryManager
 from .persona_prompt import SYSTEM_PROMPT
-from .prompt_store import PRE_ROUTING_PROMPT
+from .prompt_store import (
+    PERSONA_SYSTEM_RULES,
+    PRE_ROUTING_PROMPT,
+    SYSTEM_RULES_PROMPT,
+)
 from .state_store import MobileStateStore
 from .state_evolution import MobileStateEvolution
 from .tool_system import create_mobile_tool_processor
@@ -91,10 +95,29 @@ class MobileConversation:
         self._lock = threading.Lock()
 
     def _system_message(self) -> str:
-        return SYSTEM_PROMPT
+        return self._effective_system_prompt()
 
     def _system_message_with_tools(self) -> str:
-        return f"{SYSTEM_PROMPT}\n\n{self._tool_processor.registry.prompt()}\n"
+        return (
+            f"{self._effective_system_prompt()}\n\n"
+            f"{self._tool_processor.registry.prompt()}\n"
+        )
+
+    def _effective_system_prompt(self) -> str:
+        try:
+            persona = str(
+                self._config_store.private_value().get("persona", "") or ""
+            ).strip()
+        except Exception:
+            persona = ""
+        if not persona:
+            return SYSTEM_PROMPT
+        # 与电脑端一致：SYSTEM_PROMPT = CORE_PERSONA + system_prompt，
+        # 自定义人设时替换 CORE_PERSONA 的身份部分，但保留
+        # PAD 情感模型等不可改动的系统机制（persona_system_rules）。
+        return (
+            f"{persona}\n\n{PERSONA_SYSTEM_RULES}\n\n{SYSTEM_RULES_PROMPT}"
+        )
 
     def _character_name(self) -> str:
         try:

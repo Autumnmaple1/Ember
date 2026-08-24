@@ -10,6 +10,8 @@ DEFAULT_LLM_CONFIG: dict[str, Any] = {
     "config_version": 2,
     "character_name": "依鸣",
     "user_name": "用户",
+    "persona": "",
+    "onboarding_completed": False,
     "base_url": "https://api.deepseek.com",
     "model": "deepseek-v4-flash",
     "small_model": "deepseek-v4-flash",
@@ -29,7 +31,7 @@ DEFAULT_LLM_CONFIG: dict[str, Any] = {
     "time_accel_factor": 5.0,
     "time_flow_enabled": True,
     "state_idle_min_timeout": 40.0,
-    "state_idle_max_timeout": 120.0,
+    "state_idle_max_timeout": 1800.0,
     "context_window_size": 20,
     "state_update_interval": 1,
     "memory_encode_threshold": 5000,
@@ -142,6 +144,7 @@ class MobileConfigStore:
             "image_generation_model",
             "character_name",
             "user_name",
+            "persona",
         }
         secret_fields = {
             "api_key",
@@ -154,6 +157,7 @@ class MobileConfigStore:
             "image_generation_enabled",
             "graph_memory_enabled",
             "time_flow_enabled",
+            "onboarding_completed",
         }
         numeric_ranges = {
             "temperature": (0.0, 2.0, float),

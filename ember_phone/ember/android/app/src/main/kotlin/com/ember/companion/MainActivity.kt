@@ -56,6 +56,56 @@ class MainActivity : FlutterActivity() {
                         )
                     }
                     "engineStatus" -> result.success(PythonRuntime.status(this))
+                    "getInitialSetup" -> result.success(
+                        PythonRuntime.getInitialSetup(this),
+                    )
+                    "saveInitialSetup" -> {
+                        val configJson = call.argument<String>("configJson").orEmpty()
+                        val stateJson = call.argument<String>("stateJson").orEmpty()
+                        pythonExecutor.execute {
+                            try {
+                                val response = PythonRuntime.saveInitialSetup(
+                                    this,
+                                    configJson,
+                                    stateJson,
+                                )
+                                mainHandler.post { result.success(response) }
+                            } catch (error: Exception) {
+                                mainHandler.post {
+                                    result.error(
+                                        "EMBER_SETUP_ERROR",
+                                        error.message,
+                                        null,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    "generateInitialState" -> {
+                        val persona = call.argument<String>("persona").orEmpty()
+                        val characterName =
+                            call.argument<String>("characterName").orEmpty()
+                        val sceneHint = call.argument<String>("sceneHint").orEmpty()
+                        pythonExecutor.execute {
+                            try {
+                                val response = PythonRuntime.generateInitialState(
+                                    this,
+                                    persona,
+                                    characterName,
+                                    sceneHint,
+                                )
+                                mainHandler.post { result.success(response) }
+                            } catch (error: Exception) {
+                                mainHandler.post {
+                                    result.error(
+                                        "EMBER_GENERATE_ERROR",
+                                        error.message,
+                                        null,
+                                    )
+                                }
+                            }
+                        }
+                    }
                     "getMemoryOverview" -> {
                         pythonExecutor.execute {
                             try {

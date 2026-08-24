@@ -38,6 +38,32 @@ def get_status_json() -> str:
     return _runtime.status_json()
 
 
+def get_initial_setup() -> str:
+    return _runtime.get_initial_setup_json()
+
+
+def save_initial_setup(config_json: str, state_json: str) -> str:
+    return _runtime.save_initial_setup_json(config_json, state_json)
+
+
+def generate_initial_state(persona: str, character_name: str, scene_hint: str) -> str:
+    return _runtime.generate_initial_state_json(
+        persona, character_name, scene_hint
+    )
+
+
+def set_external_idle_driver(enabled: bool) -> str:
+    return _runtime.set_external_idle_driver_json(enabled)
+
+
+def next_idle_delay() -> str:
+    return _runtime.next_idle_delay_json()
+
+
+def run_idle_update() -> str:
+    return _runtime.run_idle_update_json()
+
+
 def get_memory_overview() -> str:
     return _runtime.memory_overview_json()
 

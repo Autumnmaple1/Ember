@@ -46,6 +46,9 @@ def desktop_prompt(name: str) -> str:
 
 
 CORE_PERSONA = desktop_prompt("core_persona")
+# 人设中不可改动的系统机制部分（PAD 情感模型说明）。
+# 自定义人设时也必须保留，否则角色会丢失 PAD 情感机制。
+PERSONA_SYSTEM_RULES = desktop_prompt("persona_system_rules")
 SYSTEM_RULES_PROMPT = desktop_prompt("system_prompt")
 # 与电脑端 config.settings 完全一致：SYSTEM_PROMPT 已包含 CORE_PERSONA。
 SYSTEM_PROMPT = CORE_PERSONA + SYSTEM_RULES_PROMPT

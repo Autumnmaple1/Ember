@@ -8,15 +8,12 @@ import android.app.Service
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
-import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicInteger
 
 class EmberForegroundService : Service() {
-    private var wakeLock: PowerManager.WakeLock? = null
-
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
@@ -48,7 +45,7 @@ class EmberForegroundService : Service() {
     override fun onDestroy() {
         Log.i(TAG, "onDestroy: 正在停止本地核心")
         stopCore()
-        releaseWakeLock()
+        IdleUpdateScheduler.cancel(this)
         Log.i(TAG, "onDestroy: 本地核心已停止")
         super.onDestroy()
     }
@@ -63,7 +60,8 @@ class EmberForegroundService : Service() {
                 PythonStreamCallback { eventJson -> handleRuntimeEvent(eventJson) },
             )
             isRunning = true
-            acquireWakeLock()
+            runCatching { PythonRuntime.setExternalIdleDriver(this, true) }
+            scheduleNextIdleUpdate()
             Log.i(TAG, "startCore: Python 核心已启动")
         } catch (error: Exception) {
             isRunning = false
@@ -79,27 +77,18 @@ class EmberForegroundService : Service() {
             Log.e(TAG, "stopCore: 停止 Python 核心失败: ${error.message}")
         } finally {
             isRunning = false
-            releaseWakeLock()
+            IdleUpdateScheduler.cancel(this)
+            runCatching { PythonRuntime.setExternalIdleDriver(this, false) }
         }
     }
 
-    private fun acquireWakeLock() {
-        if (wakeLock?.isHeld == true) return
-        val powerManager = getSystemService(PowerManager::class.java)
-        wakeLock = powerManager.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
-            "Ember:runtime",
-        ).apply {
-            setReferenceCounted(false)
-            acquire()
+    private fun scheduleNextIdleUpdate() {
+        val delay = runCatching {
+            PythonRuntime.nextIdleDelay(this).trim().toDouble()
+        }.getOrNull()
+        if (delay != null && delay > 0) {
+            IdleUpdateScheduler.schedule(this, delay)
         }
-        Log.i(TAG, "已持有后台运行唤醒锁")
-    }
-
-    private fun releaseWakeLock() {
-        wakeLock?.takeIf { it.isHeld }?.release()
-        wakeLock = null
-        Log.i(TAG, "已释放唤醒锁")
     }
 
     private fun toggleCore() {

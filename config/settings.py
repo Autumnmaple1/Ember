@@ -90,7 +90,7 @@ class Settings:
 
     # 空闲超时时间：配置值为真实世界秒数，内部乘以加速因子转换为系统时间
     STATE_IDLE_MIN_TIMEOUT = int(os.getenv("STATE_IDLE_MIN_TIMEOUT", "30")) * int(TIME_ACCEL_FACTOR)
-    STATE_IDLE_MAX_TIMEOUT = int(os.getenv("STATE_IDLE_MAX_TIMEOUT", "3600")) * int(TIME_ACCEL_FACTOR)
+    STATE_IDLE_MAX_TIMEOUT = int(os.getenv("STATE_IDLE_MAX_TIMEOUT", "1800")) * int(TIME_ACCEL_FACTOR)
 
     IDLE_STATE_UPDATE_PROMPT = PROMPTS.get("idle_state_update_prompt", "")
     IDLE_SPEAKING_UPDATE_PROMPT = PROMPTS.get("idle_speaking_update_prompt", "")

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'chat_page.dart';
 import 'ember_theme.dart';
 import 'live2d_view.dart';
+import 'setup_page.dart';
 
 void main() {
   runApp(const EmberApp());
@@ -20,7 +21,7 @@ class EmberApp extends StatelessWidget {
       title: 'Ember',
       debugShowCheckedModeBanner: false,
       theme: EmberTheme.light,
-      home: const EmberChatPage(),
+      home: const EmberRoot(),
       builder: (context, child) => Stack(
         fit: StackFit.expand,
         children: [
@@ -29,6 +30,73 @@ class EmberApp extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// 应用入口：先确保本地核心启动，再决定进首次引导还是聊天页。
+class EmberRoot extends StatefulWidget {
+  const EmberRoot({super.key});
+
+  @override
+  State<EmberRoot> createState() => _EmberRootState();
+}
+
+class _EmberRootState extends State<EmberRoot> {
+  static const _channel = MethodChannel('com.ember.companion/core');
+
+  bool _loading = true;
+  bool _needOnboarding = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+  }
+
+  Future<void> _check() async {
+    try {
+      await _channel.invokeMethod<Object?>('startEngine');
+      Object? setup;
+      for (var attempt = 0; attempt < 15; attempt++) {
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        try {
+          setup = await _channel.invokeMethod<Object?>('getInitialSetup');
+          break;
+        } on PlatformException {
+          // 本地核心还在启动，稍后重试。
+        }
+      }
+      var onboarding = false;
+      if (setup != null) {
+        final decoded = jsonDecode(setup as String);
+        if (decoded is Map) {
+          onboarding = decoded['onboarding_completed'] != true;
+        }
+      }
+      if (mounted) {
+        setState(() {
+          _needOnboarding = onboarding;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _needOnboarding = false;
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    return _needOnboarding ? const EmberSetupPage() : const EmberChatPage();
   }
 }
 

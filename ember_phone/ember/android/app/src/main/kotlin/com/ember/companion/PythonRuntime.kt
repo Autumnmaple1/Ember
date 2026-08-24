@@ -50,6 +50,55 @@ object PythonRuntime {
         return python.getModule("mobile_entry").callAttr("get_status_json").toString()
     }
 
+    fun getInitialSetup(context: Context): String {
+        val python = ensureStarted(context)
+        return python.getModule("mobile_entry").callAttr("get_initial_setup").toString()
+    }
+
+    fun saveInitialSetup(
+        context: Context,
+        configJson: String,
+        stateJson: String,
+    ): String {
+        val python = ensureStarted(context)
+        return python.getModule("mobile_entry")
+            .callAttr("save_initial_setup", configJson, stateJson)
+            .toString()
+    }
+
+    fun generateInitialState(
+        context: Context,
+        persona: String,
+        characterName: String,
+        sceneHint: String,
+    ): String {
+        val python = ensureStarted(context)
+        return python.getModule("mobile_entry")
+            .callAttr("generate_initial_state", persona, characterName, sceneHint)
+            .toString()
+    }
+
+    fun setExternalIdleDriver(context: Context, enabled: Boolean): String {
+        val python = ensureStarted(context)
+        return python.getModule("mobile_entry")
+            .callAttr("set_external_idle_driver", enabled)
+            .toString()
+    }
+
+    fun nextIdleDelay(context: Context): String {
+        val python = ensureStarted(context)
+        return python.getModule("mobile_entry")
+            .callAttr("next_idle_delay")
+            .toString()
+    }
+
+    fun runIdleUpdate(context: Context): String {
+        val python = ensureStarted(context)
+        return python.getModule("mobile_entry")
+            .callAttr("run_idle_update")
+            .toString()
+    }
+
     fun getMemoryOverview(context: Context): String {
         val python = ensureStarted(context)
         return python.getModule("mobile_entry").callAttr("get_memory_overview").toString()
