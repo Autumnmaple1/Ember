@@ -6,12 +6,48 @@ from persona.state_manager import StateManager
 import threading
 import queue
 import logging
+import re
 from memory.memory_process import Hippocampus
 import json
 from brain.tag_utils import validate_and_fix_llm_output
 from tools.processor import ToolCallProcessor
 
 logger = logging.getLogger(__name__)
+
+_MOVE_VERB_RE = re.compile(
+    r"去|到|回|来|换|搬|前往|去往|走进|来到|到达|出发|进入|转移|"
+    r"传送|瞬移|穿越|离开|去趟|去逛|去玩|去海边|换到|转到|切到|"
+    r"飞往|跑去|走去|回到|去到"
+)
+
+
+def _is_explicit_environment_change(user_message: str, location: str) -> bool:
+    """只有用户明确表达“现在要切换场景”时才视为环境变化：
+    消息里必须同时出现移动/转换动词，并且提到了该地点。"""
+    message = (user_message or "").strip()
+    location = (location or "").strip()
+    if not message or not location:
+        return False
+    if _MOVE_VERB_RE.search(message) is None:
+        return False
+    return location in message
+
+
+def _clean_background_scene(situation: str, location: str) -> str:
+    """从客观情境中提取干净的环境描述，裁掉人物叙事，避免背景图出现角色。"""
+    text = (situation or "").strip()
+    for marker in ("。依鸣", "，依鸣", "。她", "，她", "。他", "，他", "依鸣正"):
+        index = text.find(marker)
+        if 0 < index <= 80:
+            text = text[:index]
+            break
+    text = (
+        text.replace("依鸣", "")
+        .replace("她", "")
+        .replace("他", "")
+        .strip("，。 ")
+    )
+    return text[:80] or location
 
 
 class Brain:
@@ -144,13 +180,17 @@ class Brain:
                             inner = state.get("内心活动", "")
                             situation = state.get("客观情境", "")
 
+                            scene = _clean_background_scene(situation, new_location)
                             prompt = (
-                                f"High-quality anime background for a visual novel, style of Makoto Shinkai, "
-                                f"scenery porn, vibrant colors, cinematic lighting, masterpiece, 2D art. "
-                                f"Location: {new_location}. "
-                                f"Environment details: {situation[:80] if situation else new_location}. "
-                                f"Atmosphere: soft focus, atmospheric glow, high contrast between light and shadow. "
-                                f"NO characters, background only, wide angle."
+                                "二次元清新治愈系动漫背景原画，纯背景、画面干净通透，"
+                                "高质量 2D 插画。"
+                                f"场景：{new_location}，{scene}。"
+                                "构图：这是放在 Live2D 角色立绘背后的背景图，"
+                                "角色站立区域（画面中心偏下）保持干净留白，"
+                                "主要景物分布在画面上部与左右两侧，不要遮挡人物主体区域；"
+                                "横版宽画幅，柔光，浅色清新色调，轻微景深，干净利落的线条。"
+                                "禁止出现人物、剪影、文字、水印、UI 元素或 logo，"
+                                "背景中不得出现任何角色。"
                             )
                             bg_url = self.llm_client.generate_image(prompt)
                             if bg_url:
@@ -159,10 +199,18 @@ class Brain:
                         except Exception as e:
                             logger.error(f"[Location State] Error generating background: {e}")
 
-                    if settings.ENABLE_BACKGROUND_GENERATION:
-                        threading.Thread(target=_update_location_bg).start()
+                    if _is_explicit_environment_change(user_message, new_location):
+                        if settings.ENABLE_BACKGROUND_GENERATION:
+                            threading.Thread(target=_update_location_bg).start()
+                        else:
+                            logger.info(
+                                "[Location State] Background generation is disabled"
+                            )
                     else:
-                        logger.info("[Location State] Background generation is disabled")
+                        logger.info(
+                            "[Location State] 未检测到明确环境变化，跳过背景生成: %s",
+                            new_location,
+                        )
                 else:
                     if settings.STATE.get("当前行为") != new_action:
                         self.state_manager._update_state({"当前行为": new_action}, logical_now=self.event_bus.logical_now)
