@@ -3,6 +3,7 @@
 """
 import pytest
 from brain.tag_utils import fix_thought_tags, remove_thought_content, extract_thought_and_speech
+from brain.reasoning_filter import ReasoningFilter, remove_reasoning
 
 
 class TestFixThoughtTags:
@@ -76,3 +77,23 @@ class TestExtractThoughtAndSpeech:
         thought, speech = extract_thought_and_speech(text)
         assert thought == ""
         assert speech == text
+
+
+@pytest.mark.parametrize('raw, expected', [
+    ('<think>私有推理</think>你好', '你好'),
+    ('<REASONING>私有推理</REASONING>你好', '你好'),
+    ('<think>未完成推理', ''),
+    ('你好<thi', '你好'),
+    ('<think>一<reasoning>二</reasoning>三</think>你好', '你好'),
+    ('<thought>角色独白</thought><response>你好</response>', '<thought>角色独白</thought><response>你好</response>'),
+    ('数值 a < threshold', '数值 a < threshold'),
+])
+def test_reasoning_is_never_emitted_at_any_chunk_boundary(raw, expected):
+    assert remove_reasoning(raw) == expected
+    for split in range(len(raw) + 1):
+        parser = ReasoningFilter()
+        chunks = [parser.feed(raw[:split]), parser.feed(raw[split:])]
+        assert ''.join(chunks) == expected
+        assert all('私有推理' not in chunk and '未完成推理' not in chunk for chunk in chunks)
+    parser = ReasoningFilter()
+    assert ''.join(parser.feed(char) for char in raw) == expected

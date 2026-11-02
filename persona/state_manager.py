@@ -15,6 +15,7 @@ from memory.memory_process import Hippocampus
 from memory.short_term import ShortTermMemory
 from tools.processor import ToolCallProcessor
 from persona.scene import normalize_scene, validate_scene, has_time_conflict
+from memory.journal import append_log
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,9 @@ SCENE_RULES = """
 remote 必须有已确认的远程联系方式。不得从角色位置猜用户位置，不得虚构用户行动或共同经历。
 空闲/离线时可以推演角色自己的活动，但不代表确实发生；用户位置、联系方式不可推演。
 近期目标中的约定必须有明确且带时间的证据；旧历史或旧目标不能证明今天仍有约定。
+这是回复前更新，不是回复后的总结。不得预先编造角色本轮已经说过的话、同意或完成的事情。
+用户没有描述场景变化时，保持现有位置和交流方式；不要每轮重建初见或用“确认位置/关系”替换原有目标。
+保留未完成的具体角色意图，只有事件、时间或用户输入确实改变它时才调整。未知空间不等于关系陌生。
 """
 
 
@@ -105,8 +109,7 @@ class StateManager:
 
     def _async_log(self, filename, content):
         # This log is consumed by the hippocampus: order and archive consistency matter.
-        with open(filename, "a", encoding="utf-8") as file:
-            file.write(content + "\n")
+        append_log(filename, content)
 
     def _update_state(self, new_state, logical_now=None):
         data = copy.deepcopy(new_state)
@@ -117,15 +120,20 @@ class StateManager:
         temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(file)
         self.current_state = data
-        self._async_log("./config/chat_history.log", self.state_zip)
+        self._async_log('./config/chat_history.log', json.dumps({'source_type': 'role_state',
+            'state_source': data.get('state_source', 'legacy'), 'timestamp': data['对应时间'],
+            'content': self.state_zip}, ensure_ascii=False))
         self.event_bus.publish(Event("state.update", {"new_state": copy.deepcopy(data)}))
 
     def _fallback(self, now, reason, offline=False):
         state = copy.deepcopy(self.current_state)
         location = state['scene']['character_location'] or '位置待确认'
         state['客观情境'] = f"{location}；当前活动待确认"
-        state['内心活动'] = '当前活动尚未确认，不将旧场景当作现在。'
-        state['近期目标'] = '确认当前活动与交流方式'
+        # Preparation failure is a service condition, not a new character goal.
+        # Keep same-session intentions; expired/offline intentions stay unknown.
+        if offline or has_time_conflict(self.current_state.get('客观情境', ''), now):
+            state['内心活动'] = ''
+            state['近期目标'] = ''
         if offline:
             state['scene']['user_location'] = None
             state['scene']['communication_mode'] = 'unknown'
@@ -230,6 +238,7 @@ class StateManager:
                     f"；时段：{time_period(now)}。\n当前状态：{json.dumps(self.current_state, ensure_ascii=False)}"
                     f"\n带时间的历史：{json.dumps(history, ensure_ascii=False)}"
                     f"\n本轮用户明确输入：{user_text}\n{settings.STATE_UPDATE_PROMPT}"
+                    "\n日常接话可以沿用当前目标；状态更新故障不代表角色想盘问地点或疏远对方。"
                     "\n必须输出状态对象，其中 scene 字段包含双方位置、communication_mode 和 remote_contact_confirmed；scene_evidence 放在最外层。"
                 )
                 if self.dialogue_count % interval:
@@ -250,7 +259,7 @@ class StateManager:
         self.prepare_dialogue(event.data.get('text', ''))
 
     def _on_tick(self, event):
-        if self.event_bus.paused or not self.ready:
+        if self.event_bus.paused or self.event_bus.world_paused or getattr(self.event_bus, 'archive_active', False) or not self.ready:
             return
         if not self.event_bus.operation_lock.acquire(blocking=False):
             return
@@ -274,7 +283,7 @@ class StateManager:
             )
             pulse = self._generate_state(prompt, now, allow_inferred=True, call_type='idle_evolve')
             if pulse.get('memory_encode'):
-                self.event_bus.publish(Event('memory.preprocess', {}))
+                self.event_bus.publish(Event('memory.preprocess', {'reason': 'idle'}))
             sleeping = pulse.get('is_sleeping') is True
             if sleeping and not self.is_sleeping:
                 self.event_bus.publish(Event('memory.sleep', {}))
@@ -305,13 +314,22 @@ class StateManager:
     @property
     def prompt_injection(self):
         return (
-            f"\n【当前权威状态】\n{self.state_zip_full}\n"
+            f"\n【角色当前状态与事实来源】\n{self.state_zip_full}\n"
             f"【当前准确时间】{self.event_bus.formatted_logical_now}；{time_period(self.event_bus.logical_now)}\n"
             "事实优先级：系统时钟和结构化场景 > 本轮明确输入 > 带时间的历史 > 时间未知的旧历史。"
             "活动若标记 inferred 或 needs_confirmation，只是推演或待确认。不能假装知道用户位置，"
             "本轮用户明确自述属于新事实；长期记忆未命中不能否定本轮自述。"
             "不能把过去的晚安/明天/约定当作现在；不确定时承认不确定。\n"
             "交流方式若不是 face_to_face，不能描述正在触碰用户、递送物品或双方同处一地；remote 只能远程交谈。\n"
+            "未知位置、未确认联系方式只约束不能虚构物理动作，并不禁止接话、关心、讨论或邀请。"
+            "不为普通闲聊逐项盘问位置和联系方式，也不因读不到旧记忆而重新自我介绍。"
+            "来源与待确认标记用于内部判断，不在日常台词里反复解释协议或推演。"
+            "优先回应对方这句话中的具体事情，并带上与你当前意图有关的真实偏好；不必每轮把话题引回近期目标。\n"
+            "共同注意的对象必须有来源：能引用消息原文、用户提供的图片内容、已提交的活动材料或工具结果。"
+            "远程时双方不自动共看同一页纸；没有共享材料时，不用‘你看这里/是不是这里’假装指给对方看。"
+            "未提供的题目、代码、书页细节保持未知，可以提出猜测或自然请对方发原文，不假称已定位或读到。\n"
+            + (self.event_bus.experience.prompt_context() if hasattr(self.event_bus, 'experience') else '')
+            + (self.short_term_memory.working.prompt_context() if hasattr(self.short_term_memory, 'working') else '')
         )
 
     @property

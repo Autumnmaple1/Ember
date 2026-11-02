@@ -3,6 +3,7 @@
 """
 import re
 import logging
+from brain.reasoning_filter import remove_reasoning
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,8 @@ def remove_thought_content(text: str) -> str:
     if not text:
         return text
     
+    # Provider reasoning is private even when replayed from a saved message.
+    text = remove_reasoning(text)
     # 先修复标签
     text = fix_thought_tags(text)
     
@@ -121,6 +124,7 @@ def validate_and_fix_llm_output(text: str) -> str:
     if not text:
         return text
 
+    text = remove_reasoning(text)
     # 修复 thought 标签
     text = fix_thought_tags(text)
 

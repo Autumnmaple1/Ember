@@ -113,6 +113,9 @@ class Settings:
     MEMORY_ENCODING_PROMPT = PROMPTS.get("memory_encoding_prompt", "")
     MEMORY_DECENT_FACTOR = float(os.getenv("MEMORY_DECENT_FACTOR", "0.5"))
     RECALL_TOP_K = int(os.getenv("RECALL_TOP_K", "10"))
+    MEMORY_ENCODE_MESSAGES = max(2, int(os.getenv('MEMORY_ENCODE_MESSAGES', '12')))
+    MEMORY_ENCODE_INTERVAL = max(10, float(os.getenv('MEMORY_ENCODE_INTERVAL', '120')))
+    MEMORY_RETRY_INTERVAL = max(5, float(os.getenv('MEMORY_RETRY_INTERVAL', '60')))
 
     # LLM generation temperature; overridable via env for benchmark/determinism
     LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.7"))

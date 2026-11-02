@@ -40,7 +40,7 @@ try {
     status: { database: { ready: true }, long_term_memory: { ready: true }, scene: { ready: true }, paused: false } });
   await page.route('http://localhost:8000/**', route => route.fulfill({ json: route.request().url().includes('/config') ? config() : [...history].reverse() }));
   await page.route('**/models/**', route => route.abort());
-  await page.routeWebSocket('**/ws/chat', ws => {
+  await page.routeWebSocket('**/ws/chat*', ws => {
     socket = ws;
     ws.onMessage(raw => {
       const event = JSON.parse(raw);

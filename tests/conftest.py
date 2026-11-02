@@ -27,12 +27,13 @@ def pytest_configure(config):
         user=os.getenv('PG_USER') or values.get('PG_USER', 'postgres'),
         password=os.getenv('PG_PASSWORD') or values.get('PG_PASSWORD', ''),
         dbname='postgres', connect_timeout=5)
-    _test_db = 'ember_test_' + uuid.uuid4().hex
+    candidate_db = 'ember_test_' + uuid.uuid4().hex
     conn = psycopg2.connect(**_admin_args)
     conn.autocommit = True
     try:
         with conn.cursor() as cur:
-            cur.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(_test_db)))
+            cur.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(candidate_db)))
+            _test_db = candidate_db
     finally:
         conn.close()
     for key, arg in (('PG_HOST','host'),('PG_PORT','port'),('PG_USER','user'),('PG_PASSWORD','password')):

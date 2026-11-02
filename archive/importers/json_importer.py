@@ -23,6 +23,8 @@ class JsonImporter(BaseImporter):
 
     # 需要导入的配置文件
     CONFIG_FILES = [
+        ("working_memory.json", "working_memory.json"),
+        ("experience.json", "experience.json"),
         ("state.json", "state.json"),
         ("chat_memory.json", "chat_memory.json"),
         ("chat_history.log", "chat_history.log"),

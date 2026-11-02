@@ -5,6 +5,54 @@
   background: var(--surface);
   color: var(--ink)
 }
+
+/* World presentation uses authored vector assets selected by structured facts. */
+.character-stage::before { content: ''; position: absolute; inset: 0; z-index: -2; background: var(--scene-image, none) center / cover; opacity: .66; }
+.character-stage.period-dusk::before { filter: sepia(.28) saturate(.8); }
+.character-stage.period-night::before { filter: brightness(.4) saturate(.65); }
+.character-stage.period-night { background: #253831; }
+.character-stage.period-night .stage-caption,.character-stage.period-night .stage-footer { color: #f5f3e9; }
+.character-stage.period-night .stage-caption p { color: #d8dfd5; }
+.character-stage.period-night .eyebrow,.character-stage.period-night .stage-footer span { color: #f0f4e8; }
+.view-focus .companion-layout { grid-template-columns: minmax(290px,.8fr) minmax(380px,1fr); grid-template-rows: 180px minmax(350px,1fr); }
+.view-focus .character-stage { grid-column: 1; grid-row: 1; min-height: 180px; }
+.view-focus .character-stage .live2d-viewer { inset: 0 0 0 45%; }
+.view-focus .stage-caption { top: 20px; left: 20px; }
+.view-focus .stage-caption h1 { font-size: 24px; }
+.view-focus .stage-caption p,.view-focus .stage-footer { display: none; }
+.view-focus .focus-panel { grid-column: 1; grid-row: 2; }
+.view-focus .dialogue-workspace { grid-column: 2; grid-row: 1 / span 2; }
+.focus-panel { padding: 24px; background: var(--paper); border: 1px solid var(--line); border-radius: 18px; max-height: 65dvh; overflow-y: auto; }
+.focus-panel form,.scene-confirmation { display: grid; gap: 12px; }
+.focus-panel input[type=number],.focus-panel select,.record-card input,.record-search input,.scene-confirmation input:not([type=checkbox]),.scene-confirmation select,.settings-section select { min-height: 44px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--ink); background: var(--paper); font: inherit; }
+.focus-panel textarea { border: 1px solid var(--line-strong); border-radius: 8px; padding: 10px; min-height: 80px; background: var(--paper); color: var(--ink); font: inherit; }
+.view-focus .model-fallback .model-initial { display: none; }
+.view-focus .model-fallback { font-size: 12px; padding: 10px; }
+.focus-panel textarea,.record-card input,.record-search input,.scene-confirmation input,.scene-confirmation select { width: 100%; min-width: 0; }
+.focus-panel label,.record-card label,.record-search label,.scene-confirmation label { display: grid; gap: 6px; }
+.focus-panel .setting-row,.scene-confirmation .setting-row { display: flex; }
+.focus-panel .setting-row input,.scene-confirmation .setting-row input { width: auto; }
+.focus-clock { display: block; font-size: clamp(38px,5vw,64px); font-variant-numeric: tabular-nums; color: var(--accent); margin: 10px 0; }
+.record-card { padding: 16px; border: 1px solid var(--line); border-radius: 12px; margin: 14px 0; background: var(--paper); overflow-wrap: anywhere; }
+.record-card blockquote { margin: 10px 0; padding-left: 12px; border-left: 3px solid var(--line); color: var(--muted); }
+.action-row,.record-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-block: 12px; }
+.record-tabs button[aria-pressed=true] { background: var(--tint); border-color: var(--accent); }
+.record-search { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,.7fr) auto; align-items: end; gap: 12px; }
+.record-search button { align-self: end; }
+.message-highlight { outline: 2px solid var(--accent); outline-offset: -2px; }
+.archive-progress { display: grid; gap: 8px; padding: 16px; }
+.archive-create-form { display: grid; gap: 10px; }
+.archive-create-form input { width: 100%; }
+.reduce-motion *, .reduce-motion *::before, .reduce-motion *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+@media(max-width: 800px) {
+  .view-switch { flex-wrap: wrap; }
+  .world-bar { align-items: flex-start; flex-wrap: wrap; }
+  .view-focus .companion-layout { grid-template-columns: minmax(0,1fr); grid-template-rows: auto; }
+  .view-focus .character-stage,.view-focus .focus-panel,.view-focus .dialogue-workspace { grid-column: auto; grid-row: auto; }
+  .view-focus .character-stage { min-height: 180px; }
+  .view-focus .focus-panel { max-height: none; }
+  .record-search { grid-template-columns: minmax(0,1fr); }
+}
 .app-header {
   display: flex;
   align-items: center;

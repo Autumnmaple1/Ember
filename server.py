@@ -6,6 +6,7 @@ import os
 import uuid
 import re
 from collections import OrderedDict
+from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -26,6 +27,11 @@ from memory.entity_extraction import EntityExtractionMemory
 from config.logging_config import get_logger
 from tools.processor import ToolCallProcessor
 from archive import ArchiveManager
+from core.experience import Experience
+from core.world_protocol import WorldProtocol, protocol_serialized
+from core.archive_jobs import ArchiveJobs
+from core.player_api import install_player_api, presentation
+from core.shared_project import INTRO as PROJECT_INTRO
 
 # Configure logging
 logger = get_logger(__name__)
@@ -47,6 +53,10 @@ class ConnectionManager:
 
     async def broadcast(self, message: dict):
         """Pure async broadcast"""
+        if getattr(self, 'protocol', None):
+            message = self.protocol.envelope(message)
+            if message is None:
+                return
         if not self.active_connections:
             return
 
@@ -68,6 +78,12 @@ class EmberServer:
         self.app = FastAPI()
         self.event_bus = EventBus()
         self.manager = ConnectionManager()
+        self.protocol = WorldProtocol()
+        self.manager.protocol = self.protocol
+        self.experience = Experience()
+        self.event_bus.experience = self.experience
+        self.event_bus.subscribe('system.tick', lambda _: self.experience.checkpoint_if_due() if not self.event_bus.paused else None)
+        self.event_bus.quiet = self.experience.data['quiet']
         self.loop = None
         self.current_ai_msg_id = None  # Track ongoing AI message ID
         self.current_ai_turn_id = None
@@ -81,8 +97,13 @@ class EmberServer:
             base_prompt=settings.SYSTEM_PROMPT,
             max_memory_size=settings.CONTEXT_WINDOW_SIZE,
         )
-        self.episodic_memory = EpisodicMemory(self.event_bus)
-        self.hippocampus = Hippocampus(self.event_bus)
+        if not self.memory.working.existed:
+            legacy_pending = list(Path('data/failed_memories').glob('*.json'))
+            if legacy_pending:
+                self.memory.working.adopt_pending(legacy_pending)
+        allowed_ids = {m['memory_id'] for j in self.memory.working.snapshot()['jobs'] for m in j['memories']}
+        self.episodic_memory = EpisodicMemory(self.event_bus, allowed_pending_ids=allowed_ids)
+        self.hippocampus = Hippocampus(self.event_bus, self.memory.working, self.memory)
         self.db_memory = DBMemory(self.event_bus)
 
         # 创建并复用 ToolCallProcessor
@@ -115,8 +136,26 @@ class EmberServer:
         )
 
         self._setup_middleware()
+        self.archive_jobs = ArchiveJobs(self.archive_manager, self.safe_broadcast, self._restore_epoch)
+        if self.archive_manager.recovery_required:
+            self.event_bus.paused = True
         self._setup_routes()
         self._setup_event_handlers()
+        install_player_api(self)
+
+    def _restore_epoch(self):
+        self.protocol.rotate()
+        try:
+            self.experience.reload()
+            self.event_bus.quiet = self.experience.data['quiet']
+        except Exception:
+            self.archive_manager.recovery_required = True
+            self.event_bus.paused = True
+            raise
+        self._accepted_inputs.clear()
+        self.event_bus.turns.current = None
+        self.current_ai_msg_id = None
+        self.safe_broadcast({'type': 'world.reset'})
 
     def _setup_middleware(self):
         self.app.add_middleware(
@@ -132,23 +171,25 @@ class EmberServer:
         async def startup_event():
             self.loop = asyncio.get_running_loop()
             logger.info(f">>> [DEBUG] Asyncio loop initialized: {self.loop}")
-            await asyncio.to_thread(self.state_manager.prepare_startup)
-            self.heartbeat.start()
+            if not self.archive_manager.recovery_required:
+                await asyncio.to_thread(self.state_manager.prepare_startup)
+                self.heartbeat.start()
 
         @self.app.on_event('shutdown')
         async def shutdown_event():
             self.event_bus.paused = True
+            self.experience.checkpoint()
             await asyncio.to_thread(self.heartbeat.stop)
             await asyncio.to_thread(self.db_memory.flush)
             self.db_memory.stop()
+            await asyncio.to_thread(self.episodic_memory.stop)
 
         # Mount audio directory
         audio_dir = "data/audio"
         os.makedirs(audio_dir, exist_ok=True)
         self.app.mount("/audio", StaticFiles(directory=audio_dir), name="audio")
 
-        @self.app.get("/config")
-        async def get_config():
+        def config_snapshot():
             return {
                 "character_name": "Ember",
                 "display_name": settings.CHARACTER_NAME,
@@ -157,16 +198,33 @@ class EmberServer:
                 "is_thinking": self.state_manager.is_thinking or self.brain._is_processing or self.event_bus.pending_dialogues > 0,
                 "time_accel_factor": self.event_bus.time_accel_factor,
                 "timezone": settings.TIMEZONE,
-                "capabilities": {"message_receipts": True, "correlated_audio": True, "cancel_turn": True},
+                "capabilities": {"message_receipts": True, "correlated_audio": True, "cancel_turn": True,
+                    'world_epoch': hasattr(self, 'protocol'), 'player_records': hasattr(self, 'experience'),
+                    'archive_tasks': hasattr(self, 'archive_jobs'), 'shared_projects': True},
+                'shared_project': PROJECT_INTRO,
+                **(self.protocol.snapshot() if hasattr(self, 'protocol') else {}),
+                'experience': self.experience.snapshot() if hasattr(self, 'experience') else None,
+                'archive_task': self.archive_jobs.snapshot() if hasattr(self, 'archive_jobs') else None,
+                'world_paused': self.event_bus.world_paused,
+                'presentation': presentation(self.state_manager.current_state, self.event_bus.formatted_logical_now),
                 "turn": self.event_bus.turns.snapshot(),
                 "status": {
                     "database": {"ready": self.db_memory.ready, "pending_writes": len(list(self.db_memory.spool_dir.glob('*.json')))},
-                    "long_term_memory": {"ready": self.episodic_memory.ready},
+                    "long_term_memory": {"ready": self.episodic_memory.ready, 'warning': getattr(self.episodic_memory, 'last_warning', None)},
+                    'working_memory': self.memory.working.status() if hasattr(self.memory, 'working') else None,
+                    'memory_pipeline': self.hippocampus.status() if hasattr(self, 'hippocampus') else None,
                     "scene": {"ready": self.state_manager.ready, "state": self.state_manager.current_state.get('scene_status'), "error": self.state_manager.last_error},
-                    "paused": self.event_bus.paused,
+                    "paused": self.event_bus.paused or (self.archive_jobs.busy if hasattr(self, 'archive_jobs') else False),
+                    'recovery_required': getattr(getattr(self, 'archive_manager', None), 'recovery_required', False),
                     "configuration_warnings": settings.CONFIG_WARNINGS,
                 },
             }
+
+        self.config_snapshot = config_snapshot
+
+        @self.app.get('/config')
+        async def get_config():
+            return config_snapshot()
 
         class TimeAccelRequest(BaseModel):
             factor: float
@@ -174,6 +232,8 @@ class EmberServer:
         @self.app.post("/config/time_accel")
         async def set_time_accel(request: TimeAccelRequest):
             """动态设置时间加速因子"""
+            if self.event_bus.paused or self.event_bus.pending_dialogues or (hasattr(self, 'archive_jobs') and self.archive_jobs.busy):
+                raise HTTPException(409, '请等待当前任务结束后调整世界时间')
             if request.factor <= 0:
                 raise HTTPException(status_code=400, detail="时间加速因子必须大于0")
 
@@ -189,8 +249,16 @@ class EmberServer:
 
         @self.app.get("/history")
         async def get_history(limit: int = Query(20, ge=1, le=100), before: int = None, before_id: int = None):
+            epoch = self.protocol.epoch if hasattr(self, 'protocol') else None
+            if self.event_bus.paused or getattr(self.event_bus, 'archive_active', False):
+                raise HTTPException(409, '存读档期间请等待完成后同步历史')
             try:
-                return await asyncio.to_thread(self.db_memory.get_history, limit, before, before_id)
+                result = await asyncio.to_thread(self.db_memory.get_history, limit, before, before_id)
+                if self.event_bus.paused or getattr(self.event_bus, 'archive_active', False) or (epoch and epoch != self.protocol.epoch):
+                    raise HTTPException(409, '世界恢复中，请完成后重新同步历史')
+                return result
+            except HTTPException:
+                raise
             except Exception as e:
                 logger.error(f"Failed to fetch history: {e}")
                 raise HTTPException(status_code=503, detail="聊天记录数据库不可用，请重试或检查后端日志") from e
@@ -300,6 +368,13 @@ class EmberServer:
         @self.app.websocket("/ws/chat")
         async def websocket_endpoint(websocket: WebSocket):
             await self.manager.connect(websocket)
+            async def send_json(payload):
+                if hasattr(self, 'protocol'):
+                    payload = self.protocol.envelope(payload)
+                if payload is not None:
+                    await websocket.send_json(payload)
+            if websocket.query_params.get('protocol') == '2' and hasattr(self, 'protocol'):
+                await send_json({'type': 'world.snapshot', **self.protocol.snapshot()})
             last_ping = time.time()
             ping_interval = 30  # 30秒发送一次心跳
 
@@ -323,6 +398,9 @@ class EmberServer:
 
                     message = json.loads(data)
                     msg_type = message.get("type")
+                    if message.get('epoch') and hasattr(self, 'protocol') and message['epoch'] != self.protocol.epoch:
+                        await send_json({'type': 'world.reset', **self.protocol.snapshot()})
+                        continue
 
                     # 处理心跳 pong
                     if msg_type == "pong":
@@ -330,10 +408,10 @@ class EmberServer:
                     if msg_type == 'cancel_turn':
                         snapshot = self.event_bus.turns.cancel(message.get('turn_id'))
                         if snapshot is None:
-                            await websocket.send_json({'type': 'error', 'action': 'cancel_turn',
+                            await send_json({'type': 'error', 'action': 'cancel_turn',
                                 'content': '本轮已变化，请同步状态后重试', 'turn_id': message.get('turn_id')})
                         elif snapshot['status'] in ('completed', 'interrupted', 'failed'):
-                            await websocket.send_json({'type': 'turn.finished' if snapshot['released'] else 'turn.stopping', **snapshot})
+                            await send_json({'type': 'turn.finished' if snapshot['released'] else 'turn.stopping', **snapshot})
                         else:
                             await self.manager.broadcast({'type': 'turn.stopping', **snapshot})
                         continue
@@ -344,7 +422,8 @@ class EmberServer:
                         if text:
                             logger.info(f"收到手动 TTS 请求: {text[:20]}...")
                             asyncio.create_task(self._process_tts(text, target=websocket,
-                                message_id=message.get('message_id'), request_id=message.get('request_id')))
+                                message_id=message.get('message_id'), request_id=message.get('request_id'),
+                                epoch=self.protocol.epoch if hasattr(self, 'protocol') else None))
                         continue  # 必须 continue，跳过下方的 user_input 处理
 
                     user_input = message.get("content")
@@ -355,7 +434,7 @@ class EmberServer:
                                 if str(uuid.UUID(request_id)) != request_id:
                                     raise ValueError('Expected canonical UUID')
                             except (ValueError, TypeError, AttributeError):
-                                await websocket.send_json({'type': 'error', 'content': '消息标识无效，请重新编辑后发送', 'client_request_id': request_id})
+                                await send_json({'type': 'error', 'content': '消息标识无效，请重新编辑后发送', 'client_request_id': request_id})
                                 continue
                             previous = self._accepted_inputs.get(request_id)
                             if previous is None and message.get('retry'):
@@ -363,20 +442,20 @@ class EmberServer:
                                     previous = await asyncio.to_thread(self.db_memory.get_message, request_id)
                                     previous = self._accepted_inputs.get(request_id) or previous
                                 except RuntimeError:
-                                    await websocket.send_json({'type': 'error', 'content': '暂时无法核对原消息，请恢复数据库后重试', 'client_request_id': request_id})
+                                    await send_json({'type': 'error', 'content': '暂时无法核对原消息，请恢复数据库后重试', 'client_request_id': request_id})
                                     continue
                             if previous:
                                 if previous['content'] != user_input:
-                                    await websocket.send_json({'type': 'error', 'content': '同一消息标识不能用于不同内容', 'client_request_id': request_id})
+                                    await send_json({'type': 'error', 'content': '同一消息标识不能用于不同内容', 'client_request_id': request_id})
                                 else:
-                                    await websocket.send_json({**previous, 'type': 'message', 'sender': 'user',
+                                    await send_json({**previous, 'type': 'message', 'sender': 'user',
                                         'client_request_id': request_id, 'replayed': True, 'turn_snapshot': self.event_bus.turns.snapshot()})
                                 continue
-                        if self.event_bus.paused or not self.state_manager.ready:
-                            await websocket.send_json({'type': 'error', 'content': '系统正在准备场景或存读档，请稍后重试', 'client_request_id': request_id})
+                        if self.event_bus.paused or self.event_bus.world_paused or not self.state_manager.ready or (hasattr(self, 'archive_jobs') and self.archive_jobs.busy):
+                            await send_json({'type': 'error', 'content': '系统正在准备场景或存读档，请稍后重试', 'client_request_id': request_id})
                             continue
                         if message.get('format') == 'audio':
-                            await websocket.send_json({'type': 'error', 'content': '语音识别尚未启用', 'client_request_id': request_id})
+                            await send_json({'type': 'error', 'content': '语音识别尚未启用', 'client_request_id': request_id})
                             continue
                         ts = int(self.event_bus.logical_now * 1000)
                         message_id = request_id or str(uuid.uuid4())
@@ -384,7 +463,7 @@ class EmberServer:
                         with self.event_bus.pending_condition:
                             current_turn = self.event_bus.turns.snapshot()
                             turn_released = current_turn is None or current_turn.get('released', False)
-                            accepted = not self.event_bus.paused and not self.event_bus.pending_dialogues and not self.brain._is_processing and turn_released
+                            accepted = not self.event_bus.paused and not self.event_bus.world_paused and not getattr(self.event_bus, 'archive_active', False) and not self.event_bus.pending_dialogues and not self.brain._is_processing and turn_released
                             if accepted:
                                 self._accepted_inputs[message_id] = receipt
                                 if len(self._accepted_inputs) > 1024:
@@ -392,7 +471,7 @@ class EmberServer:
                                 self.event_bus.publish(Event(name='user.input', data={
                                     'text': user_input, 'message_id': message_id, 'timestamp': ts, 'turn_id': message_id}))
                         if not accepted:
-                            await websocket.send_json({'type': 'error', 'content': '当前任务尚未完成，请稍后重试', 'client_request_id': request_id})
+                            await send_json({'type': 'error', 'content': '当前任务尚未完成，请稍后重试', 'client_request_id': request_id})
                             continue
                         await self.manager.broadcast(
                             {
@@ -416,6 +495,8 @@ class EmberServer:
                 self.manager.disconnect(websocket)
 
     def _setup_event_handlers(self):
+        if hasattr(self, 'protocol'):
+            self.event_bus.subscribe('archive.restore.complete', lambda _: self._restore_epoch())
         self.event_bus.subscribe('turn.started', lambda e: self.safe_broadcast({'type': 'turn.started', **e.data}))
         self.event_bus.subscribe('turn.finished', self._on_turn_finished_internal)
         self.event_bus.subscribe('llm.interrupted', self._on_ai_interrupted_internal)
@@ -436,6 +517,7 @@ class EmberServer:
             previous['persisted'] = True
         self.safe_broadcast({'type': 'message.persisted', **event.data})
 
+    @protocol_serialized
     def _on_ai_start_internal(self, event):
         self.current_ai_msg_id = event.data['message_id']
         self.current_ai_turn_id = event.data.get('turn_id')
@@ -453,6 +535,7 @@ class EmberServer:
             }
         )
 
+    @protocol_serialized
     def _on_ai_chunk_internal(self, event):
         if event.data.get('turn_id') and event.data['turn_id'] != self.current_ai_turn_id:
             return
@@ -474,12 +557,14 @@ class EmberServer:
                 }
             )
 
+    @protocol_serialized
     def _on_ai_finished_internal(self, event):
         self.current_full_text = event.data['text']
         self.safe_broadcast({'type': 'message', 'sender': 'ai', 'mode': 'replace',
             'content': self.current_full_text, 'id': event.data['message_id'],
             'message_id': event.data['message_id'], 'timestamp': event.data['timestamp'],
-            'turn_id': event.data.get('turn_id'), 'completion_status': 'completed'})
+            'turn_id': event.data.get('turn_id'), 'completion_status': 'completed',
+            'live2d_emotion': presentation(self.state_manager.current_state, self.event_bus.formatted_logical_now)['emotion']})
         logger.info(
             f"LLM 完成输出，准备合成 TTS... (内容长度: {len(self.current_full_text)})"
         )
@@ -487,9 +572,10 @@ class EmberServer:
             # 只有开启了某种自动逻辑或当前处于 AI 回复流中才自动合成
             if self.loop:
                 final_text = self.current_full_text
+                epoch = self.protocol.epoch if hasattr(self, 'protocol') else None
                 self.loop.call_soon_threadsafe(
                     lambda: asyncio.create_task(
-                        self._process_tts(final_text, message_id=event.data['message_id'], turn_id=event.data.get('turn_id'))
+                        self._process_tts(final_text, message_id=event.data['message_id'], turn_id=event.data.get('turn_id'), epoch=epoch)
                     )
                 )
 
@@ -506,11 +592,16 @@ class EmberServer:
         self.safe_broadcast({'type': 'turn.finished', **event.data})
         self.safe_broadcast({'type': 'llm.done', **event.data})
 
-    async def _process_tts(self, text, *, target=None, message_id=None, request_id=None, turn_id=None):
+    async def _process_tts(self, text, *, target=None, message_id=None, request_id=None, turn_id=None, epoch=None):
         """处理 TTS，限制并发数量"""
+        epoch = epoch or (self.protocol.epoch if hasattr(self, 'protocol') else None)
         async def report_error(code, content):
             payload = {'type': 'tts_error', 'code': code, 'content': content,
                 'request_id': request_id, 'message_id': message_id, 'turn_id': turn_id}
+            if hasattr(self, 'protocol'):
+                payload = self.protocol.envelope(payload, epoch)
+                if payload is None:
+                    return
             if target is not None:
                 await self.manager._safe_send(target, json.dumps(payload, ensure_ascii=False))
             else:
@@ -537,6 +628,10 @@ class EmberServer:
                     raise TTSGenerationError('no_audio', '语音服务未返回音频，请重试')
                 logger.info(f"广播 Base64 TTS 音频 (长度: {len(base64_audio)})")
                 payload = {"type": "audio", "audio_base64": base64_audio, 'message_id': message_id, 'request_id': request_id, 'turn_id': turn_id}
+                if hasattr(self, 'protocol'):
+                    payload = self.protocol.envelope(payload, epoch)
+                    if payload is None:
+                        return
                 if target is not None:
                     await self.manager._safe_send(target, json.dumps(payload, ensure_ascii=False))
                 else:
@@ -550,6 +645,10 @@ class EmberServer:
 
     def safe_broadcast(self, message: dict):
         """线程安全的广播方法"""
+        if hasattr(self, 'protocol'):
+            message = self.protocol.envelope(message)
+            if message is None:
+                return
         if self.loop and self.loop.is_running():
             try:
                 # 使用 call_soon_threadsafe 安排协程创建

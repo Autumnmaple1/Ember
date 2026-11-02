@@ -1,11 +1,15 @@
 export const messageKey = message => message.message_id || `${message.role}:${message.id}`;
 
 export function parseAssistantText(raw = '') {
-  raw = raw.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '');
-  const toolStart = raw.toLowerCase().indexOf('<tool_call>');
+  // Defensive handling for old history and legacy servers. Never briefly show
+  // provider reasoning while its closing tag is still arriving.
+  raw = raw.replace(/<(think|reasoning)\s*>[\s\S]*?<\/\1\s*>/gi, '')
+    .replace(/<(?:think|reasoning)\s*>[\s\S]*$/gi, '');
+  raw = raw.replace(/<(tool|tool_call)>[\s\S]*?<\/\1>/gi, '');
+  const toolStart = raw.search(/<(?:tool|tool_call)>/i);
   if (toolStart >= 0) raw = raw.slice(0, toolStart);
   const tagStart = raw.lastIndexOf('<');
-  if (tagStart >= 0 && ['<thought>', '</thought>', '<response>', '</response>', '<tool_call>', '</tool_call>']
+  if (tagStart >= 0 && ['<think>', '</think>', '<reasoning>', '</reasoning>', '<thought>', '</thought>', '<response>', '</response>', '<tool>', '</tool>', '<tool_call>', '</tool_call>']
     .some(tag => tag.startsWith(raw.slice(tagStart).toLowerCase()))) raw = raw.slice(0, tagStart);
   const lower = raw.toLowerCase();
   const start = lower.indexOf('<thought>');
@@ -37,13 +41,12 @@ export function mergeHistory(current, incoming) {
   const byKey = new Map(current.map(message => [messageKey(message), message]));
   incoming.forEach(message => {
     // Legacy database rows may contain a whole thought block instead of speech.
-    message = { ...message, content: (message.content || '').replace(/<thought>[\s\S]*?<\/thought>/gi, '').replace(/<\/?response>/gi, '').trim() };
-    if (message.content.includes('<thought>')) message.content = '';
+    message = { ...message, content: message.role === 'ai' ? parseAssistantText(message.content || '').speech : message.content };
     const key = messageKey(message);
     const existing = byKey.get(key);
-    const restoreFinal = existing?.role === 'ai' && existing.streaming === false;
+    const restoreFinal = existing?.role === 'ai' && (existing.streaming === false || ['completed', 'interrupted'].includes(message.completion_status));
     byKey.set(key, existing
-      ? { ...message, ...existing, ...(restoreFinal ? { content: message.content, rawContent: message.content } : {}),
+      ? { ...message, ...existing, ...(restoreFinal ? { content: message.content, rawContent: message.content, streaming: false } : {}),
         completion_status: message.completion_status || existing.completion_status || 'completed',
         turn_id: message.turn_id || existing.turn_id,
         timestamp: message.timestamp, history_id: message.id, delivery: 'persisted' }

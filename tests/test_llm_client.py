@@ -5,6 +5,7 @@ LLM 客户端测试
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 import json
+from types import SimpleNamespace
 
 
 @pytest.fixture(autouse=True)
@@ -259,3 +260,76 @@ class TestLLMClient:
             result = client._extract_json('```json\n{"P": 5}\n```')
 
             assert result == {"P": 5}
+
+
+@pytest.mark.parametrize('parts', [
+    [dict(reasoning_content='私有推理。', content=None), dict(content='你好')],
+    [dict(reasoning='私有推理。', content='你好')],
+    [dict(content='<thi'), dict(content='nk>私有推理。'), dict(content='</thi'), dict(content='nk>你好')],
+    [dict(content='<THINK>私有推理。</THINK>你好')],
+    [dict(content='<reasoning>私有推理。</reasoning>你好')],
+])
+def test_stream_only_yields_public_content(parts):
+    from brain.llm_client import LLMClient
+    from config.settings import settings
+    client = object.__new__(LLMClient)
+    provider = Mock()
+    stream = Mock()
+    stream.__iter__ = Mock(return_value=iter([
+        SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(**part))], usage=None)
+        for part in parts
+    ] + [SimpleNamespace(choices=[], usage=None)]))
+    provider.chat.completions.create.return_value = stream
+    client.large_client = provider
+    assert ''.join(client.stream_chat(settings.LARGE_LLM, [])) == '你好'
+    stream.close.assert_called_once()
+
+
+def test_nonstream_response_also_excludes_inline_reasoning():
+    from brain.llm_client import LLMClient
+    from config.settings import settings
+    client = object.__new__(LLMClient)
+    client.large_client = Mock()
+    client.large_client.chat.completions.create.return_value = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content='<think>私有推理</think>{"ready":true}'))], usage=None)
+    assert client.one_chat(settings.LARGE_LLM, []) == '{"ready":true}'
+
+
+def test_reasoning_cannot_reach_dialogue_events_saved_reply_or_tts():
+    import asyncio
+    from unittest.mock import AsyncMock
+    from brain.core import Brain
+    from brain.llm_client import LLMClient
+    from brain.tts import TTSManager
+    from core.event_bus import EventBus
+    from config.settings import settings
+
+    client = object.__new__(LLMClient)
+    client.large_client = Mock()
+    pieces = [SimpleNamespace(reasoning_content='私有推理字段', content=None)] + [
+        SimpleNamespace(content=part) for part in
+        ['<thi', 'nk>私有推理正文</think>', '<thought>角色独白</thought>', '你好']]
+    client.large_client.chat.completions.create.return_value = iter(
+        SimpleNamespace(choices=[SimpleNamespace(delta=part)], usage=None) for part in pieces)
+    bus = EventBus()
+    memory = Mock()
+    memory.get_full_messages.return_value = [{'role': 'system', 'content': '合成测试角色'}]
+    state = SimpleNamespace(prepare_dialogue=Mock(), prompt_injection='', speaking_prompt_injection='')
+    tools = Mock()
+    tools.build_system_prompt_with_tools.return_value = '合成测试提示'
+    tools.extract_tool_calls.return_value = []
+    tools.has_tool_calls.return_value = False
+    tools.remove_tool_calls.side_effect = lambda text: text
+    with patch('brain.core.LLMClient', return_value=client):
+        brain = Brain(bus, state, memory, Mock(), tools)
+    chunks, completed = [], []
+    bus.subscribe('llm.chunk', lambda event: chunks.append(event.data['text']))
+    bus.subscribe('llm.finished', lambda event: completed.append(event.data['text']))
+    brain.process_dialogue('合成问题')
+    assert completed == ['<thought>角色独白</thought>你好']
+    assert '私有推理' not in ''.join(chunks)
+    assert memory.add_message.call_args.args == ('assistant', completed[0])
+    tts = TTSManager()
+    tts._do_tts = AsyncMock(return_value=b'synthetic-mp3')
+    asyncio.run(tts.generate_base64(completed[0]))
+    tts._do_tts.assert_awaited_once_with('你好')

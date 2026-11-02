@@ -7,7 +7,7 @@ import { LIVE2D_CONFIG } from './live2dConfig';
 window.PIXI = PIXI;
 Live2DModel.registerTicker(PIXI.Ticker);
 
-const Live2DViewer = ({ currentEmotion, audio, modelPath }) => {
+const Live2DViewer = ({ currentEmotion, audio, modelPath, lowPerformance = false, reduceMotion = false }) => {
     const containerRef = useRef(null);
     const canvasRef = useRef(null);
     const appRef = useRef(null);
@@ -174,12 +174,13 @@ const Live2DViewer = ({ currentEmotion, audio, modelPath }) => {
                     view: canvasRef.current,
                     width: Math.max(1, containerRef.current.clientWidth),
                     height: Math.max(1, containerRef.current.clientHeight),
-                    resolution: Math.min(window.devicePixelRatio || 1, 2),
+                    resolution: lowPerformance ? 1 : Math.min(window.devicePixelRatio || 1, 2),
                     autoDensity: true,
                     transparent: LIVE2D_CONFIG.pixi.transparent,
                     autoStart: LIVE2D_CONFIG.pixi.autoStart,
                 });
                 appRef.current = app;
+                app.ticker.maxFPS = lowPerformance ? 30 : 60;
 
                 const targetPath = modelPath || LIVE2D_CONFIG.model.path;
                 const model = await Live2DModel.from(targetPath, {
@@ -231,16 +232,30 @@ const Live2DViewer = ({ currentEmotion, audio, modelPath }) => {
                 modelRef.current = null;
             }
         };
-    }, [modelPath, loadAttempt]);
+    }, [modelPath, loadAttempt, lowPerformance]);
+
+    useEffect(() => {
+        const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+        const update = () => {
+            const model = modelRef.current;
+            if (!model || !appRef.current) return;
+            model.autoUpdate = !document.hidden && (!!audio || (!reduceMotion && !media.matches));
+            if (document.hidden) appRef.current.stop(); else appRef.current.start();
+        };
+        document.addEventListener('visibilitychange', update);
+        media.addEventListener('change', update);
+        update();
+        return () => { document.removeEventListener('visibilitychange', update); media.removeEventListener('change', update); };
+    }, [modelLoaded, reduceMotion, audio]);
 
     useEffect(() => () => { audioContextRef.current?.close().catch(() => {}); }, []);
 
     useEffect(() => {
-        if (modelLoaded && modelRef.current && currentEmotion) {
+        if (modelLoaded && modelRef.current && ['normal', 'happy', 'sad', 'angry', 'questioning'].includes(currentEmotion)) {
             const model = modelRef.current;
             if (model.expression) {
                 console.log(`Switching emotion to: ${currentEmotion}`);
-                model.expression(currentEmotion);
+                Promise.resolve(model.expression(currentEmotion)).catch(() => {});
             }
         }
     }, [currentEmotion, modelLoaded]);
@@ -248,7 +263,7 @@ const Live2DViewer = ({ currentEmotion, audio, modelPath }) => {
     // 鼠标追踪 —— 头部、眼球、身体跟随鼠标
     useEffect(() => {
         if (!modelLoaded || !modelRef.current || !LIVE2D_CONFIG.mouseTracking?.enabled
-            || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+            || reduceMotion || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 
         const { smoothing, headAngleRange, bodyAngleRange, bodyFactor } = LIVE2D_CONFIG.mouseTracking;
 
@@ -264,9 +279,11 @@ const Live2DViewer = ({ currentEmotion, audio, modelPath }) => {
             mousePos.y = Math.max(-1, Math.min(1, (e.clientY - rect.top) / rect.height * 2 - 1));
         };
 
-        window.addEventListener('mousemove', onMouseMove);
+        const surface = containerRef.current;
+        surface.addEventListener('pointermove', onMouseMove);
 
         const updateTracking = () => {
+            if (document.hidden) return;
             const coreModel = modelRef.current?.internalModel?.coreModel;
             if (!coreModel) return;
 
@@ -296,10 +313,10 @@ const Live2DViewer = ({ currentEmotion, audio, modelPath }) => {
         ticker.add(updateTracking);
 
         return () => {
-            window.removeEventListener('mousemove', onMouseMove);
+            surface.removeEventListener('pointermove', onMouseMove);
             ticker.remove(updateTracking);
         };
-    }, [modelLoaded]);
+    }, [modelLoaded, reduceMotion]);
 
     return (
         <div ref={containerRef} className="live2d-viewer" aria-label="角色展示" data-renderer-state={modelError ? 'failed' : modelLoaded ? 'ready' : 'loading'}>

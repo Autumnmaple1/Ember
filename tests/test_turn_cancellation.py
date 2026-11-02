@@ -160,8 +160,10 @@ def test_interrupted_history_is_explicit_in_the_next_prompt():
     memory.add_message('assistant', '未完成的承诺片段', timestamp=1000, completion_status='interrupted')
     brain.llm_client.stream_chat.return_value = iter(['正常回复'])
     brain.process_dialogue('接着聊')
-    prompt = brain.llm_client.stream_chat.call_args.kwargs['messages'][1]['content']
-    assert '已中断的未完成片段，不是完整承诺' in prompt
+    messages = brain.llm_client.stream_chat.call_args.kwargs['messages']
+    assert '已中断的未完成片段，不是完整承诺' in messages[0]['content']
+    assert messages[1] == {'role': 'assistant', 'content': '未完成的承诺片段'}
+    assert messages[-1] == {'role': 'user', 'content': '接着聊'}
 
 
 def test_cancel_after_tool_result_prevents_a_follow_up_model_call():

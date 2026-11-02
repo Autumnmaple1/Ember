@@ -118,7 +118,7 @@ def test_manual_audio_is_targeted_and_never_reads_monologue():
     server.tts_manager = SimpleNamespace(generate_base64=AsyncMock(return_value='synthetic-audio'))
     server.manager = SimpleNamespace(_safe_send=AsyncMock(), broadcast=AsyncMock())
     target = object()
-    asyncio.run(server._process_tts('<thought>私下的独白</thought><response>你好</response>', target=target, message_id='reply', request_id='request'))
+    asyncio.run(server._process_tts('<think>私有推理</think><thought>私下的独白</thought><response>你好</response>', target=target, message_id='reply', request_id='request'))
     server.tts_manager.generate_base64.assert_awaited_once_with('你好')
     server.manager.broadcast.assert_not_awaited()
     payload = json.loads(server.manager._safe_send.call_args.args[1])

@@ -5,6 +5,7 @@
 import zipfile
 import os
 import logging
+import tempfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -27,6 +28,7 @@ def compress_archive(
     Returns:
         是否成功
     """
+    temporary = None
     try:
         source_path = Path(source_dir)
         output_path = Path(output_path)
@@ -34,7 +36,9 @@ def compress_archive(
         # 确保输出目录存在
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        with tempfile.NamedTemporaryFile(dir=output_path.parent, suffix='.ember.tmp', delete=False) as pending:
+            temporary = Path(pending.name)
+        with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as zf:
             if files:
                 # 压缩指定文件
                 for file_name in files:
@@ -52,12 +56,16 @@ def compress_archive(
                         zf.write(file_path, arc_name)
                         logger.debug(f"已添加文件: {arc_name}")
 
+        temporary.replace(output_path)
         logger.info(f"存档压缩完成: {output_path}")
         return True
 
     except Exception as e:
         logger.error(f"压缩存档失败: {e}")
         return False
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def extract_archive(

@@ -10,6 +10,7 @@ import shutil
 import tempfile
 import threading
 import logging
+import re
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Callable
@@ -26,7 +27,7 @@ from archive.exceptions import (
 from archive.exporters import JsonExporter, PostgresExporter, Neo4jExporter
 from archive.importers import JsonImporter, PostgresImporter, Neo4jImporter
 from archive.utils.compress import compress_archive, extract_archive, get_archive_size
-from archive.utils.validate import validate_archive, calculate_dir_checksum
+from archive.utils.validate import validate_archive, calculate_dir_checksum, validate_checksum
 from archive.utils.compat import check_version_compatibility, get_current_version
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,7 @@ class ArchiveManager:
         self._lock = threading.Lock()
         self._in_progress = False
         self._current_operation = ""
+        self.recovery_required = False
 
         # 进度回调
         self._progress_callback: Optional[Callable[[str, int], None]] = None
@@ -107,6 +109,15 @@ class ArchiveManager:
             callback: 回调函数 (message: str, progress: int 0-100)
         """
         self._progress_callback = callback
+
+    def _archive_path(self, slot_name):
+        if not isinstance(slot_name, str) or not re.fullmatch(r'[\w\u4e00-\u9fff .-]{1,80}', slot_name) or '..' in slot_name or not slot_name.strip():
+            raise ArchiveError('存档名称无效')
+        root = self.archive_dir.resolve()
+        path = root / f'{slot_name}{self.ARCHIVE_EXTENSION}'
+        if path.parent != root:
+            raise ArchiveError('存档路径越界')
+        return path
 
     def _report_progress(self, message: str, progress: int, details: dict = None):
         """
@@ -234,7 +245,7 @@ class ArchiveManager:
                     # Step 6: 压缩打包 (80-95%)
                     self._report_progress("压缩存档", 85)
                     archive_path = (
-                        self.archive_dir / f"{slot_name}{self.ARCHIVE_EXTENSION}"
+                        self._archive_path(slot_name)
                     )
                     if not compress_archive(temp_dir, str(archive_path)):
                         raise ArchiveError("压缩存档失败")
@@ -310,7 +321,7 @@ class ArchiveManager:
             self._report_progress("开始加载存档", 0)
 
             # Step 1: 验证存档文件 (0-5%)
-            archive_path = self.archive_dir / f"{slot_name}{self.ARCHIVE_EXTENSION}"
+            archive_path = self._archive_path(slot_name)
             if not archive_path.exists():
                 raise ArchiveNotFoundError(slot_name)
             archive_size = get_archive_size(str(archive_path))
@@ -339,6 +350,8 @@ class ArchiveManager:
                 manifest_path = temp_path / "manifest.json"
                 with open(manifest_path, "r", encoding="utf-8") as f:
                     manifest = ArchiveManifest.from_json(f.read())
+                if manifest.checksum and not validate_checksum(temp_dir, manifest.checksum):
+                    raise ArchiveCorruptedError(slot_name, '存档内容校验失败')
                 self._report_progress(
                     "存档信息读取完成",
                     25,
@@ -412,7 +425,6 @@ class ArchiveManager:
 
                     # 检查结果
                     if not pg_result[0] or not pg_result[0].success:
-                        self._rollback_state(backup_info)
                         raise ArchiveError(
                             f"导入数据库失败: {pg_result[0].error if pg_result[0] else '未知错误'}"
                         )
@@ -462,6 +474,7 @@ class ArchiveManager:
                     self._cleanup_backup(backup_info)
 
                     self._report_progress("存档加载完成", 100)
+                    self.recovery_required = False
 
                     self._publish_event(
                         "archive.restore.complete",
@@ -470,6 +483,8 @@ class ArchiveManager:
                             "manifest": manifest.to_dict(),
                         },
                     )
+                    if self.recovery_required:
+                        raise ArchiveError('运行状态重建失败，请恢复有效存档')
 
                     return ArchiveResult(
                         success=True,
@@ -480,11 +495,11 @@ class ArchiveManager:
 
                 except ArchiveError:
                     # 尝试回滚
-                    self._rollback_state(backup_info)
+                    self.recovery_required = not self._rollback_state(backup_info)
                     raise
                 except Exception as e:
                     # 尝试回滚
-                    self._rollback_state(backup_info)
+                    self.recovery_required = not self._rollback_state(backup_info)
                     raise ArchiveError(f"加载存档时发生错误: {e}")
 
                 finally:
@@ -517,7 +532,7 @@ class ArchiveManager:
             ArchiveResult 删除结果
         """
         try:
-            archive_path = self.archive_dir / f"{slot_name}{self.ARCHIVE_EXTENSION}"
+            archive_path = self._archive_path(slot_name)
 
             if not archive_path.exists():
                 raise ArchiveNotFoundError(slot_name)
@@ -618,7 +633,7 @@ class ArchiveManager:
         Returns:
             存档元数据，如果不存在返回 None
         """
-        archive_path = self.archive_dir / f"{slot_name}{self.ARCHIVE_EXTENSION}"
+        archive_path = self._archive_path(slot_name)
 
         if not archive_path.exists():
             return None
@@ -649,9 +664,11 @@ class ArchiveManager:
 
     def _pause_system(self):
         """暂停系统组件"""
+        self._report_progress('等待当前对话与记忆任务结束', 0)
         self._operation_lock_held = False
         if self.event_bus:
-            self.event_bus.paused = True
+            with self.event_bus.pending_condition:
+                self.event_bus.paused = True
         if self.heartbeat:
             self.heartbeat.pause()
         try:
@@ -661,6 +678,8 @@ class ArchiveManager:
                         raise ArchiveError('已接收的对话尚未完成，存读档已中止')
                 self.event_bus.operation_lock.acquire()
                 self._operation_lock_held = True
+                if hasattr(self.event_bus, 'experience'):
+                    self.event_bus.experience.checkpoint()
             if self.heartbeat:
                 self.heartbeat.stop()
             if self.db_memory and not self.db_memory.flush():
@@ -681,17 +700,27 @@ class ArchiveManager:
     def _resume_system(self):
         """恢复系统组件"""
         if self.event_bus:
-            self.event_bus.paused = False
+            self.event_bus.paused = self.recovery_required
             if getattr(self, '_operation_lock_held', False):
                 self.event_bus.operation_lock.release()
                 self._operation_lock_held = False
-        if self.heartbeat:
+        if self.heartbeat and not self.recovery_required:
             self.heartbeat.start()
             logger.debug("心跳已恢复")
 
 
     def _reload_memory_state(self):
         """重建内存状态"""
+        if self.short_term_memory and hasattr(self.short_term_memory, 'working'):
+            self.short_term_memory.working.reload()
+        if self.hippocampus and hasattr(self.hippocampus, 'after_restore'):
+            self.hippocampus.after_restore()
+        if self.episodic_memory and self.short_term_memory and hasattr(self.short_term_memory, 'working'):
+            allowed = {m['memory_id'] for j in self.short_term_memory.working.snapshot()['jobs'] for m in j['memories']}
+            self.episodic_memory.reconcile_spool(allowed)
+        if self.event_bus and hasattr(self.event_bus, 'experience'):
+            self.event_bus.experience.reload()
+            self.event_bus.quiet = self.event_bus.experience.data['quiet']
         # 1. 先重载短期记忆（从 chat_memory.json）
         if self.short_term_memory and hasattr(self.short_term_memory, "_load_memory"):
             self.short_term_memory._load_memory()
@@ -721,6 +750,7 @@ class ArchiveManager:
         # 读取当前状态获取逻辑时间
         logical_time = ""
         character_name = "依鸣"
+        state = {}
 
         state_path = self.config_dir / "state.json"
         if state_path.exists():
@@ -742,6 +772,7 @@ class ArchiveManager:
             logical_time=logical_time,
             description=description,
             stats=stats or ArchiveStats(),
+            extra={'scene': state.get('scene', {}), 'summary_source': 'player_description'},
         )
 
     def _auto_backup_current_state(self) -> dict:
@@ -897,7 +928,7 @@ class ArchiveManager:
                     f.write(manifest.to_json())
 
                 # 压缩打包
-                archive_path = self.archive_dir / f"{slot_name}{self.ARCHIVE_EXTENSION}"
+                archive_path = self._archive_path(slot_name)
                 if not compress_archive(temp_dir, str(archive_path)):
                     return ArchiveResult(success=False, error="压缩存档失败")
 
@@ -942,6 +973,10 @@ class ArchiveManager:
             if not graph_result.success:
                 raise ArchiveError('无法建立知识图谱回滚点')
             log_path = self.config_dir / 'chat_history.log'
+            experience_path = self.config_dir / 'experience.json'
+            backup_info['experience'] = experience_path.read_text(encoding='utf-8') if experience_path.exists() else '{}'
+            working_path = self.config_dir / 'working_memory.json'
+            backup_info['working_memory'] = working_path.read_text(encoding='utf-8') if working_path.exists() else '{}'
             if log_path.exists():
                 backup_info['chat_history'] = log_path.read_text(encoding='utf-8')
 
@@ -986,6 +1021,10 @@ class ArchiveManager:
 
         try:
             logger.warning("开始回滚状态...")
+            if 'experience' in backup_info:
+                (self.config_dir / 'experience.json').write_text(backup_info['experience'], encoding='utf-8')
+            if 'working_memory' in backup_info:
+                (self.config_dir / 'working_memory.json').write_text(backup_info['working_memory'], encoding='utf-8')
 
             # 回滚 state.json
             if backup_info.get("state"):
@@ -1056,14 +1095,13 @@ class ArchiveManager:
                         "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = %s)",
                         (backup_table,),
                     )
-                    if cursor.fetchone()[0]:
-                        cursor.execute(f"TRUNCATE TABLE {table};")
-                        cursor.execute(
-                            f"INSERT INTO {table} SELECT * FROM {backup_table};"
-                        )
-                        from memory.postgres import sync_sequence
-                        sync_sequence(conn, table)
-                        logger.info(f"已从备份恢复表: {table}")
+                    if not cursor.fetchone()[0]:
+                        raise ArchiveError(f'缺少必要回滚表: {backup_table}')
+                    cursor.execute(f"TRUNCATE TABLE {table};")
+                    cursor.execute(f"INSERT INTO {table} SELECT * FROM {backup_table};")
+                    from memory.postgres import sync_sequence
+                    sync_sequence(conn, table)
+                    logger.info(f"已从备份恢复表: {table}")
                 except Exception as e:
                     logger.warning(f"恢复表 {table} 失败: {e}")
                     conn.rollback()

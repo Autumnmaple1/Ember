@@ -5,6 +5,7 @@ import threading
 from json_repair import repair_json
 from config.settings import settings
 from core.turns import TurnCancelled
+from brain.reasoning_filter import ReasoningFilter, remove_reasoning
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +163,7 @@ class LLMClient:
                     response, "usage_metadata", None
                 )
                 self._log_usage(usage, model_config.name, call_type)
-                return full_response
+                return remove_reasoning(full_response)
             except Exception as e:
                 logger.error(
                     f"OneChat Error (attempt {attempt + 1}/{max_retries}): {e}"
@@ -199,6 +200,7 @@ class LLMClient:
                 cancel_token.attach_stream(response.close)
 
             last_usage = None
+            public_content = ReasoningFilter()
             for chunk in response:
                 if cancel_token:
                     cancel_token.check()
@@ -209,13 +211,14 @@ class LLMClient:
                 if not chunk.choices:
                     continue
 
-                reasoning = getattr(chunk.choices[0].delta, "reasoning_content", None)
-                if reasoning:
-                    yield reasoning
-
-                content = chunk.choices[0].delta.content
-                if content is not None:
-                    yield content
+                # reasoning_content/reasoning are private provider channels.
+                # Some gateways ignore enable_thinking=False or put <think>
+                # blocks in content; filter before any downstream consumer.
+                content = getattr(chunk.choices[0].delta, 'content', None)
+                if isinstance(content, str):
+                    visible = public_content.feed(content)
+                    if visible:
+                        yield visible
 
             if cancel_token:
                 cancel_token.check()

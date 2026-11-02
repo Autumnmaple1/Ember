@@ -10,6 +10,10 @@ export class AudioController {
     this.requests = new Set();
     this.current = null;
     this.version = 0;
+    this.volume = 1;
+    this.paused = false;
+    this.acquire = null;
+    this.preparing = false;
   }
 
   notify(state, audio = null, error = '') { this.onChange({ state, audio, error }); }
@@ -31,6 +35,27 @@ export class AudioController {
     if (!enabled) this.stop();
   }
 
+  setVolume(value) {
+    this.volume = Math.max(0, Math.min(1, Number(value) || 0));
+    if (this.current) this.current.volume = this.volume;
+  }
+
+  async togglePause() {
+    const audio = this.current;
+    if (!audio) return;
+    if (!this.paused) {
+      audio.pause();
+      this.paused = true;
+      this.notify('paused', audio);
+    } else {
+      try {
+        await audio.play();
+        if (this.current === audio) { this.paused = false; this.notify('playing', audio); }
+        else audio.pause();
+      } catch { this.notify('blocked', null, '请点击重播以恢复声音。'); }
+    }
+  }
+
   suppressMessage(id) {
     this.beginMessage(id);
     if (id) this.suppressed.add(id);
@@ -41,6 +66,7 @@ export class AudioController {
     this.knownMessages.forEach(id => this.suppressed.add(id));
     this.requests.clear();
     this.queue = [];
+    this.preparing = false;
     if (this.current) {
       this.current.onended = null;
       this.current.onerror = null;
@@ -49,6 +75,7 @@ export class AudioController {
       this.current.load();
     }
     this.current = null;
+    this.paused = false;
     this.notify('idle');
   }
 
@@ -78,14 +105,21 @@ export class AudioController {
       this.beginMessage(event.message_id);
       return;
     }
-    this.queue.push(event);
+    this.queue.push({ ...event, manual: !!manual });
     this.playNext();
   }
 
   async playNext() {
-    if (this.current || !this.queue.length) return;
+    if (this.current || this.preparing || !this.queue.length) return;
     const event = this.queue.shift();
+    const requestedVersion = this.version;
+    this.preparing = true;
+    const acquired = this.acquire ? await this.acquire(event.manual) : true;
+    if (requestedVersion !== this.version) return;
+    this.preparing = false;
+    if (!acquired) { this.queue = []; this.notify('blocked', null, '声音由其他标签页播放；点击“重播这句”可在此接管。'); return; }
     const audio = this.createAudio(`data:audio/${event.format || 'mp3'};base64,${event.audio_base64 || event.content}`);
+    audio.volume = this.volume;
     const version = this.version;
     this.current = audio;
     const finish = () => {

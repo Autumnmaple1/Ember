@@ -1,512 +1,106 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import './ArchiveModal.css';
+import { API_BASE, getJSON } from './api';
 
-import { API_BASE as BACKEND_URL, getJSON } from './api';
-const API_BASE = `${BACKEND_URL}/api/archive`;
-
-function ArchiveModal({ isOpen, onClose }) {
-    const [archives, setArchives] = useState([]);
-    const [loading, setLoading] = useState(false);
-    const dialogRef = useRef(null);
-    const [operation, setOperation] = useState(null); // 'saving' | 'loading' | 'deleting'
-    const [progress, setProgress] = useState({ message: '', percent: 0 });
-    const [showCreateForm, setShowCreateForm] = useState(false);
-    const [newSlotName, setNewSlotName] = useState('');
-    const [newSlotDesc, setNewSlotDesc] = useState('');
-    const [error, setError] = useState('');
-    const [timeAccelFactor, setTimeAccelFactor] = useState(1.0);
-    const [timeAccelDraft, setTimeAccelDraft] = useState(1.0);
-    const [settingTime, setSettingTime] = useState(false);
-
-    // 加载存档列表
-    const loadArchives = async () => {
-        try {
-            setLoading(true);
-            const data = await getJSON(`${API_BASE}/list`);
-            if (data.success) {
-                setArchives(data.archives || []);
-            }
-        } catch (err) {
-            console.error('加载存档列表失败:', err);
-            setError('加载存档列表失败');
-        } finally {
-            setLoading(false);
-        }
+const endpoint = API_BASE + '/api/archive';
+const terminal = task => task && task.status !== 'running';
+export default function ArchiveModal({ isOpen, onClose, session }) {
+  const dialog = useRef(null), completed = useRef(null);
+  const [archives, setArchives] = useState([]);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [task, setTask] = useState(session?.config?.archive_task || null);
+  const [pending, setPending] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [deleting, setDeleting] = useState(null);
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const busy = pending || task?.status === 'running';
+  const taskId = task?.task_id, taskStatus = task?.status;
+  const loadList = async () => {
+    setLoading(true);
+    try { const data = await getJSON(endpoint + '/list'); if (!data.success) throw new Error(data.error || '读取失败'); setArchives(data.archives); }
+    catch (failure) { setError(failure.message); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => {
+    if (!isOpen) return;
+    const previous = document.activeElement, element = dialog.current;
+    element.showModal(); loadList();
+    return () => { element.close(); previous?.focus(); };
+  }, [isOpen]);
+  const adoptTask = incoming => setTask(current => !incoming || (current?.revision || 0) > (incoming.revision || 0)
+    || (current?.task_id === incoming.task_id && terminal(current) && !terminal(incoming)) ? current : incoming);
+  useEffect(() => { adoptTask(session?.config?.archive_task); }, [session?.config?.archive_task]);
+  useEffect(() => {
+    if (!taskId || taskStatus !== 'running') return;
+    let disposed = false, timer;
+    const poll = async () => {
+      try { const result = await getJSON(endpoint + '/tasks/current'); if (!disposed) adoptTask(result.task); }
+      catch (failure) { if (!disposed) setError('任务状态暂不可读：' + failure.message + '。恢复连接后继续核对。'); }
+      if (!disposed) timer = setTimeout(poll, 1000);
     };
-
-    // 加载时间加速因子
-    const fetchTimeAccel = async () => {
-        try {
-            const data = await getJSON(`${BACKEND_URL}/config`);
-            if (data.time_accel_factor !== undefined) {
-                setTimeAccelFactor(data.time_accel_factor);
-                setTimeAccelDraft(data.time_accel_factor);
-            }
-        } catch (err) {
-            console.error('获取时间加速因子失败:', err);
-        }
-    };
-
-    // 设置时间加速因子
-    const handleTimeAccelChange = async (newFactor) => {
-        setSettingTime(true);
-        try {
-            const data = await getJSON(`${BACKEND_URL}/config/time_accel`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ factor: newFactor }),
-            });
-            setTimeAccelFactor(data.time_accel_factor);
-            setTimeAccelDraft(data.time_accel_factor);
-        } catch (err) {
-            console.error('设置时间加速因子失败:', err);
-            setTimeAccelDraft(timeAccelFactor);
-            setError(`时间倍率未修改：${err.message}`);
-        } finally {
-            setSettingTime(false);
-        }
-    };
-
-    useEffect(() => {
-        if (isOpen) {
-            const dialog = dialogRef.current;
-            const previous = document.activeElement;
-            dialog.showModal();
-            loadArchives();
-            fetchTimeAccel();
-            setError('');
-            return () => { dialog.close(); previous?.focus(); };
-        }
-    }, [isOpen]);
-
-    // 创建存档
-    const handleCreate = async () => {
-        if (!newSlotName.trim()) {
-            setError('请输入存档名称');
-            return;
-        }
-
-        setOperation('saving');
-        setProgress({ message: '正在创建存档...', percent: 0 });
-        setError('');
-
-        try {
-            const data = await getJSON(`${API_BASE}/create`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    slot_name: newSlotName.trim(),
-                    description: newSlotDesc.trim()
-                })
-            });
-
-            if (data.success) {
-                setProgress({ message: '存档创建成功！', percent: 100 });
-                setTimeout(() => {
-                    setShowCreateForm(false);
-                    setNewSlotName('');
-                    setNewSlotDesc('');
-                    loadArchives();
-                    setOperation(null);
-                }, 1000);
-            } else {
-                setError(data.error || '创建失败');
-                setOperation(null);
-            }
-        } catch (err) {
-            setError('创建存档失败: ' + err.message);
-            setOperation(null);
-        }
-    };
-
-    // 加载存档
-    const handleLoad = async (slotName) => {
-        if (!window.confirm(`确定要加载存档 "${slotName}" 吗？\n当前状态将被覆盖。`)) {
-            return;
-        }
-
-        setOperation('loading');
-        setProgress({ message: '正在加载存档...', percent: 0 });
-        setError('');
-
-        try {
-            const data = await getJSON(`${API_BASE}/load`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ slot_name: slotName })
-            });
-
-            if (data.success) {
-                setProgress({ message: '存档加载成功！', percent: 100 });
-                setTimeout(() => {
-                    setOperation(null);
-                    onClose();
-                    // 刷新页面以应用新状态
-                    window.location.reload();
-                }, 1500);
-            } else {
-                setError(data.error || '加载失败');
-                setOperation(null);
-            }
-        } catch (err) {
-            setError('加载存档失败: ' + err.message);
-            setOperation(null);
-        }
-    };
-
-    // 删除存档
-    const handleDelete = async (slotName) => {
-        if (!window.confirm(`确定要删除存档 "${slotName}" 吗？\n此操作不可撤销。`)) {
-            return;
-        }
-
-        setOperation('deleting');
-        setError('');
-
-        try {
-            const data = await getJSON(`${API_BASE}/${encodeURIComponent(slotName)}`, {
-                method: 'DELETE'
-            });
-
-            if (data.success) {
-                loadArchives();
-            } else {
-                setError(data.error || '删除失败');
-            }
-        } catch (err) {
-            setError('删除存档失败: ' + err.message);
-        } finally {
-            setOperation(null);
-        }
-    };
-
-    // 快速存档
-    const handleQuickSave = async () => {
-        setOperation('saving');
-        setProgress({ message: '正在快速存档...', percent: 0 });
-        setError('');
-
-        try {
-            const data = await getJSON(`${API_BASE}/quick-save`, { method: 'POST' });
-
-            if (data.success) {
-                setProgress({ message: '快速存档成功！', percent: 100 });
-                setTimeout(() => {
-                    loadArchives();
-                    setOperation(null);
-                }, 1000);
-            } else {
-                setError(data.error || '快速存档失败');
-                setOperation(null);
-            }
-        } catch (err) {
-            setError('快速存档失败: ' + err.message);
-            setOperation(null);
-        }
-    };
-
-    // 快速读档
-    const handleQuickLoad = async () => {
-        if (!window.confirm('确定要快速读档吗？\n当前状态将被覆盖。')) {
-            return;
-        }
-
-        setOperation('loading');
-        setProgress({ message: '正在快速读档...', percent: 0 });
-        setError('');
-
-        try {
-            const data = await getJSON(`${API_BASE}/quick-load`, { method: 'POST' });
-
-            if (data.success) {
-                setProgress({ message: '快速读档成功！', percent: 100 });
-                setTimeout(() => {
-                    setOperation(null);
-                    onClose();
-                    window.location.reload();
-                }, 1500);
-            } else {
-                setError(data.error || '快速读档失败');
-                setOperation(null);
-            }
-        } catch (err) {
-            setError('快速读档失败: ' + err.message);
-            setOperation(null);
-        }
-    };
-
-    // 格式化文件大小
-    const formatSize = (bytes) => {
-        if (bytes < 1024) return bytes + ' B';
-        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-    };
-
-    // 格式化时间
-    const formatTime = (isoString) => {
-        if (!isoString) return '';
-        try {
-            const date = new Date(isoString);
-            return date.toLocaleString('zh-CN', {
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit'
-            });
-        } catch {
-            return isoString;
-        }
-    };
-
-    if (!isOpen) return null;
-
-    // SVG 图标组件
-    const SaveIcon = () => (
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style={{ display: 'inline-block', verticalAlign: 'middle' }}>
-            <path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z" />
-        </svg>
-    );
-
-    const LoadIcon = () => (
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style={{ display: 'inline-block', verticalAlign: 'middle' }}>
-            <path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z" />
-        </svg>
-    );
-
-    const AddIcon = () => (
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style={{ display: 'inline-block', verticalAlign: 'middle' }}>
-            <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
-        </svg>
-    );
-
-    const DeleteIcon = () => (
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style={{ display: 'inline-block', verticalAlign: 'middle' }}>
-            <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
-        </svg>
-    );
-
-    const CloseIcon = () => (
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style={{ display: 'block' }}>
-            <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-        </svg>
-    );
-
-    return (
-        <dialog ref={dialogRef} aria-label="存档管理" className="archive-modal-overlay"
-            onCancel={event => { event.preventDefault(); if (!operation) onClose(); }}
-            onClick={event => { if (event.target === event.currentTarget && !operation) onClose(); }}>
-            <div className="archive-modal" onClick={e => e.stopPropagation()}>
-                {/* 标题栏 */}
-                <div className="archive-modal-header">
-                    <h2>存档管理</h2>
-                    <button className="archive-close-btn" aria-label="关闭存档管理" disabled={!!operation} onClick={onClose}>
-                        <CloseIcon />
-                    </button>
-                </div>
-
-                {/* 时间加速控制 */}
-                <div className="time-accel-section">
-                    <div className="time-accel-header">
-                        <label htmlFor="archive-time-accel" className="time-accel-label">世界时间倍率 · 当前 {timeAccelFactor}x</label>
-                        <span className="time-accel-value">预览 {timeAccelDraft}x</span>
-                    </div>
-                    <input
-                        type="range"
-                        id="archive-time-accel"
-                        className="time-accel-slider"
-                        min="0.5"
-                        max="20"
-                        step="0.5"
-                        value={timeAccelDraft}
-                        disabled={!!operation || settingTime}
-                        onChange={(e) => setTimeAccelDraft(parseFloat(e.target.value))}
-                    />
-                    <div className="time-accel-marks">
-                        <span>0.5x</span>
-                        <span>5x</span>
-                        <span>10x</span>
-                        <span>15x</span>
-                        <span>20x</span>
-                    </div>
-                    <button disabled={!!operation || settingTime || timeAccelDraft === timeAccelFactor}
-                        onClick={() => handleTimeAccelChange(timeAccelDraft)}>{settingTime ? '正在应用…' : '应用时间倍率'}</button>
-                </div>
-
-                {/* 错误提示 */}
-                {error && (
-                    <div className="archive-error">
-                        {error}
-                    </div>
-                )}
-
-                {/* 进度提示 */}
-                {operation && (
-                    <div className="archive-progress">
-                        <div className="archive-progress-bar">
-                            <div
-                                className="archive-progress-fill"
-                                style={{ width: `${progress.percent}%` }}
-                            />
-                        </div>
-                        <span>{progress.message}</span>
-                    </div>
-                )}
-
-
-
-                {/* 创建存档表单 */}
-                {showCreateForm && (
-                    <div className="archive-create-form">
-                        <input
-                            type="text"
-                            placeholder="存档名称"
-                            value={newSlotName}
-                            onChange={e => setNewSlotName(e.target.value)}
-                            maxLength={20}
-                        />
-                        <input
-                            type="text"
-                            placeholder="存档描述（可选）"
-                            value={newSlotDesc}
-                            onChange={e => setNewSlotDesc(e.target.value)}
-                            maxLength={50}
-                        />
-                        <div className="archive-create-actions">
-                            <button
-                                className="archive-btn archive-btn-primary"
-                                onClick={handleCreate}
-                                disabled={operation || !newSlotName.trim()}
-                            >
-                                确认创建
-                            </button>
-                            <button
-                                className="archive-btn archive-btn-secondary"
-                                onClick={() => {
-                                    setShowCreateForm(false);
-                                    setNewSlotName('');
-                                    setNewSlotDesc('');
-                                }}
-                            >
-                                取消
-                            </button>
-                        </div>
-                    </div>
-                )}
-
-                {/* 存档列表 */}
-                <div className="archive-list">
-                    <h3>存档列表 ({archives.length})</h3>
-                    {loading && <p role="status">正在加载存档列表…</p>}
-                    {archives.length === 0 ? (
-                        <div className="archive-empty">
-                            {loading ? '正在读取…' : error ? '未能读取存档，可关闭后重新打开以重试。' : '暂无存档，点击“新建存档”创建'}
-                        </div>
-                    ) : (
-                        <div className="archive-gallery">
-                            {/* 排序：快速存档 > 手动存档 > 自动备份 */}
-                            {[...archives].sort((a, b) => {
-                                const getType = (archive) => {
-                                    if (archive.slot_name === 'quick_save') return 0;
-                                    if (archive.slot_name?.startsWith('auto_backup')) return 2;
-                                    return 1;
-                                };
-                                return getType(a) - getType(b);
-                            }).map((archive, index) => (
-                                <div
-                                    key={archive.slot_name || index}
-                                    className={`archive-card ${!archive.is_valid ? 'archive-invalid' : ''} ${archive.slot_name?.startsWith('auto_backup') ? 'archive-auto' : ''} ${archive.slot_name === 'quick_save' ? 'archive-quick' : ''}`}
-                                >
-                                    {/* 头部：名称 + 类型标签 */}
-                                    <div className="archive-card-header">
-                                        <span className="archive-card-name">
-                                            {archive.slot_name}
-                                        </span>
-                                        {archive.slot_name === 'quick_save' && (
-                                            <span className="archive-card-badge archive-badge-quick">快速</span>
-                                        )}
-                                        {archive.slot_name?.startsWith('auto_backup') && (
-                                            <span className="archive-card-badge archive-badge-auto">自动</span>
-                                        )}
-                                        {!archive.slot_name?.startsWith('auto_backup') && archive.slot_name !== 'quick_save' && (
-                                            <span className="archive-card-badge archive-badge-manual">手动</span>
-                                        )}
-                                    </div>
-
-                                    {/* 内容：描述 + 时间 + 大小 */}
-                                    <div className="archive-card-body">
-                                        <div className="archive-card-desc">
-                                            {archive.description || '无描述'}
-                                        </div>
-                                        <div className="archive-card-meta">
-                                            <span className="archive-card-time">
-                                                {formatTime(archive.created_at)}
-                                            </span>
-                                            {archive.file_size && (
-                                                <span className="archive-card-size">
-                                                    {formatSize(archive.file_size)}
-                                                </span>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    {/* 操作区 */}
-                                    <div className="archive-card-actions">
-                                        <button
-                                            className="archive-card-btn archive-card-btn-load"
-                                            onClick={() => handleLoad(archive.slot_name)}
-                                            disabled={operation || !archive.is_valid}
-                                            title="加载此存档"
-                                        >
-                                            <LoadIcon /> 加载
-                                        </button>
-                                        <button
-                                            className="archive-card-btn archive-card-btn-delete"
-                                            onClick={() => handleDelete(archive.slot_name)}
-                                            disabled={operation}
-                                            title="删除此存档"
-                                        >
-                                            <DeleteIcon />
-                                        </button>
-                                    </div>
-
-                                    {!archive.is_valid && (
-                                        <div className="archive-card-error" title={archive.error_message || '存档损坏'}>
-                                            存档损坏
-                                        </div>
-                                    )}
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-
-                {/* 底部操作按钮 */}
-                <div className="archive-footer">
-                    <button
-                        className="archive-btn archive-btn-primary"
-                        onClick={handleQuickSave}
-                        disabled={operation}
-                    >
-                        <SaveIcon /> 快速存档
-                    </button>
-                    <button
-                        className="archive-btn archive-btn-secondary"
-                        onClick={handleQuickLoad}
-                        disabled={operation}
-                    >
-                        <LoadIcon /> 快速读档
-                    </button>
-                    <button
-                        className="archive-btn archive-btn-create"
-                        onClick={() => setShowCreateForm(!showCreateForm)}
-                        disabled={operation}
-                    >
-                        <AddIcon /> 新建存档
-                    </button>
-                </div>
-            </div>
-        </dialog>
-    );
+    poll();
+    return () => { disposed = true; clearTimeout(timer); };
+  }, [taskId, taskStatus]);
+  useEffect(() => {
+    if (!terminal(task) || completed.current === task.task_id) return;
+    completed.current = task.task_id;
+    if (task.status === 'failed') setError(task.result?.error || task.phase);
+    else {
+      setError(''); setPreview(null); setName(''); setDescription(''); loadList();
+      if (['load', 'quick-load'].includes(task.operation)) session?.refreshWorld();
+    }
+  }, [task, session]);
+  const start = async (operation, slot_name = '') => {
+    setPending(true); setError('');
+    try {
+      const result = await getJSON(endpoint + '/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation, slot_name, description, epoch: session.worldEpoch }) });
+      adoptTask(result);
+    } catch (failure) {
+      setError(failure.message);
+      try { const result = await getJSON(endpoint + '/tasks/current'); adoptTask(result.task); } catch { /* Preserve the error; a timeout is not proof of failure. */ }
+    } finally { setPending(false); }
+  };
+  const inspect = async slot => {
+    setPending(true); setError('');
+    try {
+      const result = await getJSON(endpoint + '/' + encodeURIComponent(slot) + '/preview');
+      if (!result.success) throw new Error(result.error || '预览失败');
+      setPreview({ slot, ...result.manifest });
+    } catch (failure) { setError(failure.message); }
+    finally { setPending(false); }
+  };
+  const remove = async () => {
+    setPending(true); setError('');
+    try {
+      const result = await getJSON(endpoint + '/' + encodeURIComponent(deleting), { method: 'DELETE' });
+      if (!result.success) throw new Error(result.error || '删除失败');
+      setDeleting(null); await loadList();
+    } catch (failure) { setError(failure.message); }
+    finally { setPending(false); }
+  };
+  if (!isOpen) return null;
+  return <dialog ref={dialog} aria-label="存档管理" className="archive-modal-overlay" onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}>
+    <div className="archive-modal"><header className="archive-modal-header"><h2>存档管理</h2><button aria-label="关闭存档管理" disabled={busy} onClick={onClose}>关闭</button></header>
+      {error && <p className="archive-error" role="alert">{error}</p>}
+      {task && <div className="archive-progress" role="status" aria-live="polite"><strong>{({ running: '正在处理', completed: '已完成', failed: '未完成' })[task.status]}</strong><span>{task.phase}</span><small>任务 {task.task_id.slice(0, 8)}{task.status === 'running' ? ' · 当前步骤不可安全取消，请等待' : ''}</small>
+        {task.recovery_required && <p className="inline-error">恢复未完成，世界已暂停。请选择已知有效的存档重试；保留自动备份。</p>}</div>}
+      {!session?.config?.capabilities?.archive_tasks ? <p>请同时更新并重启后端，以启用安全存读档。</p> : <>
+        <div className="archive-footer"><button disabled={busy} onClick={() => start('quick-save')}>快速存档</button><button disabled={busy} onClick={() => inspect('quick_save')}>快速读档 · 先预览</button></div>
+        {preview && <section className="record-card" aria-label="加载预览"><h3>加载 {preview.slot}</h3><dl className="fact-list"><dt>角色</dt><dd>{preview.character_name}</dd><dt>世界时间</dt><dd>{preview.logical_time}</dd><dt>角色位置</dt><dd>{preview.extra?.scene?.character_location || '旧存档未记录'}</dd><dt>消息数</dt><dd>{preview.stats?.message_count || 0}</dd></dl><p>{preview.description}</p><p>先等待当前任务结束并备份现有进度，再恢复数据库、场景、计时和活动记录。自习暂停等待确认；旧声音和事件失效。</p><div className="action-row"><button disabled={busy} onClick={() => start('load', preview.slot)}>备份当前进度并加载</button><button disabled={busy} onClick={() => setPreview(null)}>取消加载</button></div></section>}
+        {deleting && <section className="record-card" aria-label="确认删除"><h3>删除存档 {deleting}？</h3><p>仅删除此存档文件，无法撤销。不会删除当前聊天数据库。</p><div className="action-row"><button disabled={busy} onClick={remove}>确认删除此存档</button><button disabled={busy} onClick={() => setDeleting(null)}>保留存档</button></div></section>}
+        <form className="archive-create-form" onSubmit={event => { event.preventDefault(); if (archives.some(item => item.slot_name === name.trim())) { setError('同名存档已存在，请使用新名称'); return; } start('create', name.trim()); }}>
+          <h3>新建存档</h3><label>存档名称<input required maxLength={40} value={name} onChange={event => setName(event.target.value)} /></label><label>简短回顾<input maxLength={300} value={description} onChange={event => setDescription(event.target.value)} /></label><button disabled={busy || !name.trim()}>创建新存档</button>
+        </form>
+      </>}
+      <section className="archive-list"><h3>已保存的进度</h3><button disabled={busy || loading} onClick={loadList}>刷新存档列表</button>{loading && <p role="status">正在读取存档…</p>}{!loading && !archives.length && <p>暂无存档。</p>}
+        {['快速存档', '手动存档', '自动备份'].map(group => {
+          const slots = archives.filter(item => (item.slot_name === 'quick_save' ? '快速存档' : item.slot_name.startsWith('auto_backup') ? '自动备份' : '手动存档') === group);
+          return slots.length ? <div key={group}><h4>{group}</h4><div className="archive-gallery">{slots.map(item => <article className="archive-card" key={item.slot_name}><h4>{item.slot_name}</h4><p>{item.description || '没有回顾'}</p><p>{item.logical_time || item.created_at}</p><small>{Math.round((item.file_size || 0) / 1024)} KB</small>{!item.is_valid && <p className="inline-error">{item.error_message || '存档无效'}</p>}<div className="action-row"><button disabled={busy || !item.is_valid} onClick={() => inspect(item.slot_name)}>预览并加载</button><button disabled={busy} onClick={() => setDeleting(item.slot_name)}>删除</button></div></article>)}</div></div> : null;
+        })}
+      </section>
+    </div>
+  </dialog>;
 }
-
-export default ArchiveModal;

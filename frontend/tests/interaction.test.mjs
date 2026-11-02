@@ -2,6 +2,30 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AudioController } from '../src/audioController.js';
 import { applyMessage, parseAssistantText, mergeHistory } from '../src/messageHistory.js';
+
+test('actual memory tool markup stays hidden at each streaming boundary', () => {
+  for (const tag of ['tool', 'tool_call']) {
+    const raw = `<${tag}>{"name":"memory_query","parameters":{"query":"私有检索词"}}</${tag}>`;
+    for (let length = 1; length <= raw.length; length += 1) assert.equal(parseAssistantText(raw.slice(0, length)).speech, '');
+    assert.equal(parseAssistantText(raw + '桂花茶，我记得。').speech, '桂花茶，我记得。');
+  }
+});
+
+test('provider reasoning stays hidden on every stream prefix and during history replay', () => {
+  const raw = '<think>私有推理。</think><thought>角色独白</thought><response>你好</response>';
+  let messages = [];
+  for (const char of raw) {
+    messages = applyMessage(messages, { sender: 'ai', message_id: 'private-test', mode: 'append', content: char });
+    assert.ok(!messages[0].content.includes('私有'));
+    assert.ok(!messages[0].content.includes('推理'));
+    assert.ok(!messages[0].content.includes('角色独白'));
+  }
+  assert.equal(messages[0].content, '你好');
+  assert.equal(parseAssistantText('<REASONING>私有推理</REASONING>你好').speech, '你好');
+  assert.equal(parseAssistantText('<think>未完成推理').speech, '');
+  assert.equal(mergeHistory([], [{ id: 1, role: 'ai', content: raw }])[0].content, '你好');
+  assert.equal(mergeHistory([], [{ id: 2, role: 'user', content: '<think>用户原文</think>' }])[0].content, '<think>用户原文</think>');
+});
 import { isSendKey, readPreference } from '../src/preferences.js';
 import { getJSON } from '../src/api.js';
 

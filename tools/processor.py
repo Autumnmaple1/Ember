@@ -236,7 +236,9 @@ class ToolCallProcessor:
             if result.success:
                 # 尝试使用工具的摘要方法
                 tool = self.tool_registry.get(tool_name)
-                if tool:
+                if tool and hasattr(tool, 'format_result_for_model'):
+                    lines.append(f"- {tool_name}: {tool.format_result_for_model(result)}")
+                elif tool:
                     summary = tool.summarize_result(result, max_length=200)
                     lines.append(f"- {tool_name}: {summary}")
                 else:

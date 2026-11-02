@@ -3,21 +3,37 @@ import threading
 import logging
 import json
 import concurrent.futures
+import copy
+import math
+import uuid
 from config.settings import settings
 from core.event_bus import EventBus, Event
 from brain.llm_client import LLMClient
 from memory.neo4j_memory import Neo4jGraphMemory
+from memory.working_memory import WorkingMemory
+from memory.journal import LOG_LOCK, consume_prefix
+from core.time_utils import to_epoch
 
 logger = logging.getLogger(__name__)
 
 
 class Hippocampus:
-    _file_lock = threading.Lock()
+    _file_lock = LOG_LOCK
 
-    def __init__(self, event_bus: EventBus):
+    def __init__(self, event_bus: EventBus, working_memory=None, short_term_memory=None):
         self.event_bus = event_bus
         self.event_bus.subscribe("memory.preprocess", self._on_preprocess_request)
         self.llm_client = LLMClient()
+        self.working = working_memory or WorkingMemory()
+        self.short_term_memory = short_term_memory
+        self._encode_lock = threading.RLock()
+        self._completion_lock = threading.RLock()
+        self._last_attempt = 0
+        self._last_encoded = time.monotonic()
+        self.last_error = None
+        event_bus.subscribe('memory.stored', self._on_stored)
+        event_bus.subscribe('memory.store_failed', self._on_store_failed)
+        event_bus.subscribe('system.tick', self._on_tick)
 
         # 初始化 Neo4j 图谱连接
         self.graph_memory = None
@@ -36,49 +52,182 @@ class Hippocampus:
             return ""
 
     def _on_preprocess_request(self, event: Event):
-        res = self._load_experience()
-        if not res:
-            logger.info("No experience log found, skipping preprocessing.")
+        if self.event_bus.paused or self.event_bus.world_paused or getattr(self.event_bus, 'archive_active', False):
             return
+        with self.event_bus.operation_lock, self._encode_lock:
+            if event.data.get('reason') in ('idle', 'checkpoint') and time.monotonic() - self._last_attempt < settings.MEMORY_RETRY_INTERVAL:
+                return
+            self._last_attempt = time.monotonic()
+            jobs = self.working.snapshot()['jobs']
+            if jobs:
+                for job in jobs:
+                    self._dispatch(job)
+                return
+            res = self._load_experience()
+            if not res.strip():
+                return
+            # Keep complete lines and the exact prefix for transactional acknowledgement.
+            lines, size = [], 0
+            for line in res.splitlines(keepends=True):
+                if lines and size + len(line) > 18000:
+                    break
+                lines.append(line)
+                size += len(line)
+            res = ''.join(lines)
+            sources = self._sources(res)
+            recent = self.short_term_memory.get_memory()['history'] if self.short_term_memory else []
+            context = {'log': res, 'buffered_sources': self.working.snapshot()['sources'],
+                'previous_notes': self.working.snapshot()['notes'], 'recent_dialogue': recent}
+            try:
+                response = self.llm_client.one_chat(settings.LARGE_LLM, [
+                    {'role': 'system', 'content': settings.MEMORY_ENCODING_PROMPT},
+                    {'role': 'user', 'content': json.dumps(context, ensure_ascii=False)}], call_type='memory_encode')
+                parsed = self.llm_client._extract_json(response) if response else None
+                raw = parsed.get('memories') if isinstance(parsed, dict) else parsed
+                notes = parsed.get('working_notes', []) if isinstance(parsed, dict) else []
+                if not isinstance(raw, list) or not isinstance(notes, list):
+                    raise ValueError('记忆编码未返回合法列表')
+                memories = self._validate_memories(raw, sources, res)
+                # Explicit requests to retain something must not be silently discarded.
+                if not memories and any(self._important(x) for x in sources):
+                    for item in sources:
+                        if self._important(item):
+                            memories.append(self._attributed_memory(item, res))
+                job = self.working.add_job(res, memories, notes, sources + recent)
+                self._dispatch(job)
+            except Exception as exc:
+                self.last_error = '记忆整理失败，原始日志与中期缓冲已保留'
+                try:
+                    self.working.request()
+                except OSError:
+                    logger.warning('Memory checkpoint unavailable; original log retained')
+                logger.warning('Memory encoding retained for retry (%s)', type(exc).__name__)
 
-        system_prompt = settings.MEMORY_ENCODING_PROMPT
-        user_prompt = f"提供的日志如下：\n\n{res}"
-        resp = self.llm_client.one_chat(
-            settings.LARGE_LLM,
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            call_type="memory_encode",
-        )
+    @staticmethod
+    def _sources(text):
+        result = []
+        for line in text.splitlines():
+            try:
+                row = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            if (isinstance(row, dict) and row.get('role') in ('user', 'assistant', 'system_event')
+                    and isinstance(row.get('content'), str) and isinstance(row.get('message_id'), str)):
+                result.append(row)
+        return result
 
-        if resp is None:
-            logger.error(
-                "LLM returned no response during memory preprocessing (resp is None)"
-            )
+    @staticmethod
+    def _important(source):
+        return source.get('role') == 'user' and any(cue in source['content'] for cue in ('请记住', '记一下', '别忘了', '我们约好'))
+
+    def _validate_memories(self, raw, sources, text):
+        source_map = {x['message_id']: x for x in sources}
+        has_legacy = False
+        for line in text.splitlines():
+            try:
+                row = json.loads(line)
+                has_legacy |= isinstance(row, dict) and row.get('source_type') == 'role_state'
+            except ValueError:
+                has_legacy |= bool(line.strip())
+        result = []
+        for value in raw:
+            if not isinstance(value, dict) or not isinstance(value.get('content'), str) or not value['content'].strip():
+                raise ValueError('长期记忆正文无效')
+            mem = {k: copy.deepcopy(value[k]) for k in ('content', 'insight', 'keywords', 'importance', 'confidence', 'time') if k in value}
+            keys = value.get('source_ids', [])
+            if not isinstance(keys, list) or any(key not in source_map for key in keys):
+                raise ValueError('长期记忆引用了不存在的来源')
+            if sources and not keys and not (has_legacy and value.get('source_type') == 'legacy_or_simulated'):
+                raise ValueError('新对话记忆缺少来源标识')
+            for field, default, maximum in (('confidence', 0.5, 1), ('importance', 1, 10)):
+                number = mem.get(field, default)
+                if type(number) not in (int, float) or not math.isfinite(number) or not 0 <= number <= maximum:
+                    raise ValueError('记忆权重无效')
+                mem[field] = number
+            evidence = [source_map[key] for key in keys]
+            stamps = [x['timestamp'] for x in evidence if type(x.get('timestamp')) in (int, float) and math.isfinite(x['timestamp'])]
+            if stamps:
+                mem['time'] = self.event_bus.format_logical_time(max(stamps) / 1000)
+                mem['time_basis'] = 'source_message_time'
+            else:
+                mem['time'] = self.event_bus.format_logical_time(to_epoch(mem['time'])) if mem.get('time') else None
+                mem['time_basis'] = 'model_estimate' if mem['time'] else 'unknown'
+            if not evidence:
+                mem['confidence'] = min(mem['confidence'], 0.5)
+            if not isinstance(mem.get('insight', ''), str) or not isinstance(mem.get('keywords', []), list):
+                raise ValueError('记忆字段无效')
+            source_type = 'player_activity_record' if evidence and all(x.get('role') == 'system_event' for x in evidence) else 'quoted_dialogue' if evidence else 'legacy_or_simulated'
+            mem.update(source_ids=keys, source_type=source_type,
+                evidence=[{k: row.get(k) for k in ('message_id', 'role', 'timestamp', 'content', 'completion_status')} for row in evidence])
+            mem['memory_id'] = str(uuid.uuid5(uuid.NAMESPACE_URL, text + json.dumps(mem, ensure_ascii=False, sort_keys=True)))
+            result.append(mem)
+        return result
+
+    def _attributed_memory(self, source, text):
+        item = {'content': '用户自述（仅作原文记录）：' + source['content'], 'confidence': 1,
+            'importance': 1, 'keywords': ['用户自述'], 'source_ids': [source['message_id']]}
+        return self._validate_memories([item], [source], text)[0]
+
+    def _dispatch(self, job):
+        for memory in job['memories']:
+            if memory['memory_id'] in job['acknowledged']:
+                continue
+            receipts = self.event_bus.publish(Event('memory.store', copy.deepcopy(memory)))
+            if not any(isinstance(x, dict) and x.get('accepted') and x.get('memory_id') == memory['memory_id'] for x in receipts or []):
+                self.last_error = '长期记忆待办尚未被可靠接收，原始资料已保留'
+        self._complete_jobs()
+
+    def _on_stored(self, event):
+        key = event.data['memory_id']
+        if not any(key in {m['memory_id'] for m in j['memories']} for j in self.working.snapshot()['jobs']):
             return
+        self.working.acknowledge(key)
+        self._complete_jobs()
 
+    def _on_store_failed(self, event):
+        self.last_error = '长期记忆入库失败，已保留原始日志与待办，稍后自动重试'
+
+    def _complete_jobs(self):
+        with self._completion_lock:
+            self._finish_acknowledged()
+
+    def _finish_acknowledged(self):
+        for job in self.working.snapshot()['jobs']:
+            if set(job['acknowledged']) >= {x['memory_id'] for x in job['memories']}:
+                if job.get('phase') != 'committing':
+                    self.working.begin_commit(job['id'])
+                consumed = not job['text'] or consume_prefix(job['text'])
+                self.working.finish(job['id'])
+                self.last_error = None if consumed or job.get('phase') == 'committing' else '已入库记忆的原始日志前缀已变化，保留当前日志'
+                self._last_encoded = time.monotonic()
+
+    def _on_tick(self, event):
+        bus = self.event_bus
+        if (bus.paused or bus.world_paused or getattr(bus, 'archive_active', False)
+                or bus.pending_dialogues or time.monotonic() - self._last_attempt < settings.MEMORY_RETRY_INTERVAL):
+            return
+        if not bus.operation_lock.acquire(blocking=False):
+            return
         try:
-            memories = self.llm_client._extract_json(resp)
-            if memories is None:
-                raise json.JSONDecodeError("Failed to extract JSON", resp, 0)
+            data = self.working.snapshot()
+            text = self._load_experience()
+            sources = self._sources(text)
+            legacy = any(line.strip() and not line.lstrip().startswith('{') for line in text.splitlines())
+            important = any(self._important(x) for x in sources)
+            if (data['jobs'] or data['requested'] or important or len(sources) >= settings.MEMORY_ENCODE_MESSAGES or
+                    ((sources or legacy) and time.monotonic() - self._last_encoded >= settings.MEMORY_ENCODE_INTERVAL)):
+                self._on_preprocess_request(Event('memory.preprocess', {'reason': 'checkpoint'}))
+        finally:
+            bus.operation_lock.release()
 
-            for mem in memories:
-                import uuid
-                mem['memory_id'] = str(uuid.uuid5(uuid.NAMESPACE_URL, res + json.dumps(mem, ensure_ascii=False, sort_keys=True)))
-                logger.info(f"Preprocessed memory: {mem}")
-                self.event_bus.publish(Event("memory.store", mem))
-            # Keep the original experience if encoding failed; appenders may have added a suffix.
-            with self._file_lock:
-                from pathlib import Path
-                file = Path('./config/chat_history.log')
-                current = file.read_text(encoding='utf-8')
-                if current.startswith(res):
-                    file.write_text(current[len(res):], encoding='utf-8')
-        except (TypeError, json.JSONDecodeError) as e:
-            logger.error(
-                f"Failed to decode LLM response during memory preprocessing: {e}. Raw response: {repr(resp)}"
-            )
+    def after_restore(self):
+        self.working.reload()
+        self.last_error = None
+        self._last_attempt = 0
+        self._last_encoded = time.monotonic()
+
+    def status(self):
+        return {**self.working.status(), 'last_error': self.last_error}
 
     def query_memory(
         self,
@@ -129,7 +278,9 @@ class Hippocampus:
                 )
 
             # 获取向量检索结果
-            raw_memories = future_episodic.result(timeout=timeout)
+            retrieval = future_episodic.result(timeout=timeout)
+            warnings = retrieval.get('warnings', []) if isinstance(retrieval, dict) else []
+            raw_memories = retrieval.get('items', []) if isinstance(retrieval, dict) else retrieval
             simplified_memories = self._simplify_memories(raw_memories)
 
             # 获取图谱查询结果
@@ -150,6 +301,8 @@ class Hippocampus:
             return {
                 "found": found,
                 "episodic_memories": simplified_memories,
+                'episodic_records': raw_memories,
+                'warnings': warnings,
                 "graph_entities": graph_context.get("entities", {}),
                 "graph_relations": graph_context.get("relations", []),
                 "query": query,
@@ -254,7 +407,7 @@ class Hippocampus:
         lines = []
         for mem in memories:
             content = mem.get("content", "")
-            time = mem.get("time", "")[:10]  # 只取日期
+            time = (mem.get('time') or '时间未知')[:19]
             lines.append(f"[{time}] {content}")
         return lines
 
@@ -357,10 +510,13 @@ class Hippocampus:
         query_data["callback"] = on_memory_retrieved
         self.event_bus.publish(Event("memory.query", query_data))
         try:
-            return future.result(timeout=5)
+            result = future.result(timeout=5)
+            if isinstance(result, dict) and result.get('error'):
+                raise RuntimeError(result['error'])
+            return result
         except concurrent.futures.TimeoutError:
             logger.error("查询持久化记忆超时，跳过查询以维持对话。")
-            return []
+            raise RuntimeError('长期记忆检索超时')
         except Exception as e:
             logger.error(f"查询持久化记忆时发生异常: {e}")
-            return []
+            raise

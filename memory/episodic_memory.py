@@ -29,11 +29,12 @@ def serialized(method):
 
 
 class EpisodicMemory:
-    def __init__(self, event_bus: EventBus):
+    def __init__(self, event_bus: EventBus, allowed_pending_ids=None):
         self.event_bus = event_bus
         self.conn = None
         self.ready = False
         self.last_error = None
+        self.last_warning = None
         self._db_lock = threading.RLock()
         self._ensure_connection()
         self._init_db()
@@ -42,8 +43,13 @@ class EpisodicMemory:
         self.spool_dir = Path('data/failed_memories')
         self.spool_dir.mkdir(parents=True, exist_ok=True)
         self.llm_client = LLMClient()
+        self._pending_lock = threading.Lock()
+        self._pending_ids = set()
+        self.reconcile_spool(allowed_pending_ids)
         for file in self.spool_dir.glob('*.json'):
-            self.store_queue.put({'type': 'store', 'data': json.loads(file.read_text(encoding='utf-8'))})
+            data = json.loads(file.read_text(encoding='utf-8'))
+            self._pending_ids.add(data['memory_id'])
+            self.store_queue.put({'type': 'store', 'data': data})
 
         self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
         self.worker_thread.start()
@@ -124,11 +130,30 @@ class EpisodicMemory:
 
     def _on_store_request(self, event: Event):
         event.data.setdefault('memory_id', str(uuid.uuid4()))
-        file = self.spool_dir / (event.data['memory_id'] + '.json')
-        temp = file.with_suffix('.tmp')
-        temp.write_text(json.dumps(event.data, ensure_ascii=False), encoding='utf-8')
-        temp.replace(file)
-        self.store_queue.put({"type": "store", "data": event.data})
+        key = event.data['memory_id']
+        if str(uuid.UUID(key)) != key:
+            raise ValueError('记忆标识无效')
+        with self._pending_lock:
+            if key not in self._pending_ids:
+                file = self.spool_dir / (key + '.json')
+                temp = file.with_suffix('.tmp')
+                temp.write_text(json.dumps(event.data, ensure_ascii=False), encoding='utf-8')
+                temp.replace(file)
+                self._pending_ids.add(key)
+                self.store_queue.put({"type": "store", "data": event.data})
+        return {'accepted': True, 'memory_id': key}
+
+    def reconcile_spool(self, allowed_ids):
+        """Retain other-world failures outside automatic replay."""
+        if allowed_ids is None:
+            return
+        for file in self.spool_dir.glob('*.json'):
+            if file.stem not in allowed_ids:
+                directory = self.spool_dir / 'retired' / str(uuid.uuid4())
+                directory.mkdir(parents=True, exist_ok=True)
+                if self.spool_dir.resolve() not in file.resolve().parents or self.spool_dir.resolve() not in directory.resolve().parents:
+                    raise ValueError('待办隔离路径越界')
+                file.rename(directory / file.name)
 
     def _worker_loop(self):
         """工作线程循环，支持优雅退出"""
@@ -150,6 +175,7 @@ class EpisodicMemory:
                         try:
                             self._async_store_process(task['data'])
                             (self.spool_dir / (task['data']['memory_id'] + '.json')).unlink(missing_ok=True)
+                            self.event_bus.publish(Event('memory.stored', {'memory_id': task['data']['memory_id']}))
                             break
                         except Exception:
                             if attempt == 2:
@@ -160,7 +186,12 @@ class EpisodicMemory:
             except Exception as e:
                 self.ready, self.last_error = False, str(e)
                 logger.error(f"Error in EpisodicMemory worker loop: {e}")
+                if task.get('type') == 'store':
+                    self.event_bus.publish(Event('memory.store_failed', {'memory_id': task['data']['memory_id']}))
             finally:
+                if task.get('type') == 'store':
+                    with self._pending_lock:
+                        self._pending_ids.discard(task['data']['memory_id'])
                 try:
                     self.store_queue.task_done()
                 except:
@@ -198,6 +229,14 @@ class EpisodicMemory:
 
     @serialized
     def _on_query_request(self, event: Event):
+        try:
+            self._query_records(event)
+        except Exception as exc:
+            self.ready, self.last_error = False, str(exc)
+            if 'callback' in event.data:
+                event.data['callback']({'error': '长期记忆查询失败，请检查数据库或向量服务'})
+
+    def _query_records(self, event):
         query = event.data.get("query", "")
         key_words = event.data.get("key_words", [])
         if not query and not key_words:
@@ -216,9 +255,9 @@ class EpisodicMemory:
 
         self._ensure_connection()
         if not self.conn:
-            if "callback" in event.data:
-                event.data["callback"]([])
-            return
+            raise RuntimeError('长期记忆数据库不可用')
+        if query and embedding is None and not key_words:
+            raise RuntimeError('查询向量生成失败')
 
         memories_sim = self._query_by_similarity(embedding) if embedding else []
         memories_key = self._query_by_keywords(key_words) if key_words else []
@@ -231,8 +270,10 @@ class EpisodicMemory:
                 combined_memories.append(m)
                 seen_ids.add(m["id"])
 
+        self.last_warning = '语义检索暂不可用，当前仅使用关键词检索' if query and embedding is None else None
         if "callback" in event.data:
-            event.data["callback"](combined_memories)
+            event.data["callback"]({'items': combined_memories, 'warnings': [self.last_warning]} if self.last_warning else combined_memories)
+        self.ready, self.last_error = True, None
 
         for m_id in seen_ids:
             self.store_queue.put({"type": "update_access", "id": m_id})
@@ -301,7 +342,9 @@ class EpisodicMemory:
                         event_data.get("insight_embedding"),
                         event_data.get("importance", 1.0),
                         event_data.get("confidence", 1.0),
-                        Json({"keywords": event_data.get("keywords", [])}),
+                        Json({key: event_data.get(key, []) for key in ('keywords', 'source_ids', 'evidence')}
+                            | {'source_type': event_data.get('source_type', 'legacy_or_simulated'),
+                               'time_basis': event_data.get('time_basis', 'legacy_unknown')}),
                         event_data.get("time"),
                         event_data.get("time"),
                         event_data.get("importance", 1.0),
@@ -346,11 +389,12 @@ class EpisodicMemory:
                             "insight": row[2],
                             "importance": row[3],
                             "confidence": row[4],
+                            'similarity': max((value for value in (row[8], row[9]) if value is not None), default=0),
                             "metadata": row[7],
                             "time": (
                                 row[10].isoformat()
                                 if hasattr(row[10], "isoformat")
-                                else str(row[10])
+                                else str(row[10]) if row[10] is not None else None
                             ),
                         }
                     )
@@ -359,7 +403,7 @@ class EpisodicMemory:
             logger.error(f"Similarity query failed: {e}")
             if self.conn:
                 self.conn.rollback()
-            return []
+            raise RuntimeError('长期记忆相似度查询失败') from e
 
     def _query_by_keywords(self, keywords: list):
         if not keywords:
@@ -401,7 +445,7 @@ class EpisodicMemory:
                             "time": (
                                 row[9].isoformat()
                                 if hasattr(row[9], "isoformat")
-                                else str(row[9])
+                                else str(row[9]) if row[9] is not None else None
                             ),
                         }
                     )
@@ -410,7 +454,7 @@ class EpisodicMemory:
             logger.error(f"Keyword query failed: {e}")
             if self.conn:
                 self.conn.rollback()
-            return []
+            raise RuntimeError('长期记忆关键词查询失败') from e
 
     def stop(self):
         self.store_queue.put(None)

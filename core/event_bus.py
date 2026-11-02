@@ -26,6 +26,8 @@ class EventBus:
         self._subscribers: Dict[str, List[Callable[[Event], None]]] = defaultdict(list)
         self.operation_lock = threading.RLock()
         self.paused = False
+        self.world_paused = False
+        self.quiet = False
         self.pending_condition = threading.Condition()
         self.pending_dialogues = 0
         self.turns = TurnCoordinator()
@@ -45,9 +47,18 @@ class EventBus:
 
     @property
     def logical_now(self):
+        if self.world_paused:
+            return self._base_logical_time
         real_elapsed = time.monotonic() - self._real_start_time
         logical_time = self._base_logical_time + (real_elapsed * self.time_accel_factor)
         return logical_time
+
+    def pause_world(self, paused):
+        with self.operation_lock:
+            now = self.logical_now
+            self._base_logical_time = now
+            self._real_start_time = time.monotonic()
+            self.world_paused = bool(paused)
 
     @property
     def formatted_logical_now(self):
@@ -84,9 +95,11 @@ class EventBus:
         self._subscribers[event_name].append(callback)
 
     def publish(self, event: Event):
+        results = []
         if event.name in self._subscribers:
             for callback in self._subscribers[event.name]:
                 try:
-                    callback(event)
+                    results.append(callback(event))
                 except Exception as e:
                     logger.error(f"处理事件 {event.name} 时出错: {e}")
+        return results

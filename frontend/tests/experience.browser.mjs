@@ -60,7 +60,7 @@ try {
   });
   // Renderer fallback is intentional here; a separate smoke page below loads the real asset.
   await page.route('**/models/**', route => route.abort());
-  await page.routeWebSocket('**/ws/chat', ws => {
+  await page.routeWebSocket('**/ws/chat*', ws => {
     socket = ws;
     ws.onMessage(raw => {
       const event = JSON.parse(raw);
@@ -104,6 +104,11 @@ try {
   await page.getByRole('button', { name: '等待本轮完成' }).waitFor();
   await input.fill('本轮结束以后再发的草稿');
   const replyId = `response-${accepted.size}`;
+  for (const fragment of ['<thi', 'nk>私有推理不应展示', '</thi', 'nk>']) {
+    socket.send(JSON.stringify({ type: 'message', sender: 'ai', message_id: replyId, mode: 'append', content: fragment }));
+    await page.waitForTimeout(30);
+    assert.equal(await page.getByText('私有推理不应展示', { exact: false }).count(), 0);
+  }
   socket.send(JSON.stringify({ type: 'message', sender: 'ai', message_id: replyId, mode: 'append', content: '<thought>合成独白</thought><response>这是一条合成对白。</response>' }));
   thinking = false;
   socket.send(JSON.stringify({ type: 'llm.done', message_id: replyId }));
@@ -178,12 +183,12 @@ try {
   await page.keyboard.press('Escape');
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
   assert.equal(await page.getByRole('button', { name: '设置', exact: true }).evaluate(element => document.activeElement === element), true);
-  await page.getByRole('button', { name: '存档', exact: true }).click();
-  await page.getByRole('dialog', { name: '存档管理' }).waitFor();
-  await page.locator('#archive-time-accel').fill('4');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('dialog', { name: '设置' }).waitFor();
+  await page.getByRole('slider', { name: '世界时间倍率', exact: true }).fill('4');
   await page.getByRole('button', { name: '应用时间倍率' }).click();
   await page.getByText('时间倍率未修改：模拟倍率保存失败', { exact: true }).waitFor();
-  assert.equal(await page.locator('#archive-time-accel').inputValue(), '1');
+  assert.equal(await page.getByRole('slider', { name: '世界时间倍率', exact: true }).inputValue(), '1');
   await page.keyboard.press('Escape');
   await page.reload();
   await input.waitFor();
@@ -210,7 +215,7 @@ try {
   const renderErrors = [];
   renderPage.on('console', message => { if (message.type() === 'error') renderErrors.push(message.text()); });
   await renderPage.route('http://localhost:8000/**', route => route.fulfill({ json: route.request().url().includes('/config') ? config() : [...history].reverse() }));
-  await renderPage.routeWebSocket('**/ws/chat', () => {});
+  await renderPage.routeWebSocket('**/ws/chat*', () => {});
   await renderPage.goto(url);
   try { await renderPage.locator('.live2d-viewer[data-renderer-state="ready"]').waitFor({ timeout: 30000 }); }
   catch (error) { console.error(JSON.stringify({ rendererErrors: renderErrors })); throw error; }

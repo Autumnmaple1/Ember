@@ -11,6 +11,7 @@ import uuid
 import re
 from brain.tag_utils import validate_and_fix_llm_output, extract_thought_and_speech
 from core.turns import TurnCancelled, TERMINAL
+from brain.dialogue_context import build_dialogue_messages
 from tools.processor import ToolCallProcessor
 
 logger = logging.getLogger(__name__)
@@ -70,14 +71,16 @@ class Brain:
         finally:
             with self.event_bus.pending_condition:
                 self.event_bus.pending_dialogues -= 1
+                self._emit_turn_finished(turn)
                 self.event_bus.pending_condition.notify_all()
-            self._emit_turn_finished(turn)
 
     def _on_idle_speak(self, event: Event):
+        if self.event_bus.quiet or self.event_bus.world_paused or getattr(self.event_bus, 'archive_active', False):
+            return
         def _speak():
             with self.event_bus.operation_lock:
                 with self.event_bus.pending_condition:
-                    if self.event_bus.paused or self.event_bus.pending_dialogues:
+                    if self.event_bus.paused or self.event_bus.world_paused or self.event_bus.quiet or getattr(self.event_bus, 'archive_active', False) or self.event_bus.pending_dialogues:
                         return
                     turn = self.event_bus.turns.begin(int(self.event_bus.logical_now * 1000), source='proactive')
                     self._is_processing = True
@@ -98,8 +101,8 @@ class Brain:
             if self.event_bus.paused and not _accepted:
                 return
             turn = self._process_dialogue(user_message, metadata or {})
-        if not _accepted:
-            self._emit_turn_finished(turn)
+            if not _accepted:
+                self._emit_turn_finished(turn)
 
     def _process_dialogue(self, user_message, metadata):
         # 防止并发处理
@@ -148,7 +151,7 @@ class Brain:
         if not turn.finish(status):
             return
         raw = self.tool_processor.remove_tool_calls(turn.partial)
-        raw = re.sub(r'<tool_call>[\s\S]*$', '', raw, flags=re.IGNORECASE)
+        raw = re.sub(r'<(?:tool|tool_call)>[\s\S]*$', '', raw, flags=re.IGNORECASE)
         _, speech = extract_thought_and_speech(raw)
         speech = re.sub(r'</?response>', '', speech, flags=re.IGNORECASE).strip()
         if speech:
@@ -210,38 +213,11 @@ class Brain:
             system_prompt = data[0]["content"]
             history = data[1:]
 
-        # 构建消息（在锁外）
-        if pack:
-            # 使用列表构建历史，比字符串拼接更高效
-            history_parts = []
-            for msg in history:
-                role_label = (
-                    "对方" if msg["role"] == "user" else f"{settings.CHARACTER_NAME}"
-                )
-                if msg.get('completion_status') == 'interrupted':
-                    role_label += '（已中断的未完成片段，不是完整承诺）'
-                when = self.event_bus.format_logical_time(msg['timestamp'] / 1000) if msg.get('timestamp') else '时间未知，仅为历史背景'
-                history_parts.append(f"[{when}] {role_label}: {msg['content']}\n")
-            formatted_history = "".join(history_parts)
-
-            dynamic_context = ""
-            if memories:
-                dynamic_context = f"\n\n[脑海闪现的记忆]：\n{memories}\n"
-
-            state_injection = self.state_manager.prompt_injection
-            if proactive:
-                state_injection += self.state_manager.speaking_prompt_injection
-
-            user_content = f"""以下是对话历史：
-{formatted_history}{dynamic_context}{state_injection}
-现在的时间是{self.event_bus.formatted_logical_now}，请参考并结合状态生成你将要说的下一句话"""
-
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ]
-        else:
-            messages = data
+        # Preserve actual dialogue roles on both legacy and normal entry paths.
+        # Dynamic facts belong to the system context, never a fake user transcript.
+        messages = build_dialogue_messages(system_prompt, history, self.state_manager.prompt_injection,
+            self.event_bus.logical_now, proactive=proactive,
+            proactive_instruction=settings.IDLE_SPEAKING_UPDATE_PROMPT, memories=memories)
 
         full_content = ""
         chunk_count = 0

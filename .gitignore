@@ -3,6 +3,7 @@
 # =========================
 .env
 .env.*
+*.env
 !.env.example
 arrangement.txt
 /generated_prompt.md
@@ -38,6 +39,9 @@ pip-delete-this-directory.txt
 .coverage.*
 htmlcov/
 coverage.xml
+test-results/
+playwright-report/
+blob-report/
 build/
 dist/
 node_modules/
@@ -72,6 +76,25 @@ data/archives/
 *.sqlite3-shm
 chroma_db/
 
+# 数据导出、存档和本地备份（不影响源码中的 .sql 迁移文件）
+*.ember
+*.dump
+*.pgdump
+*.backup
+*.sql.gz
+*.sql.zip
+*.bak
+.psql_history
+
+# 本地凭据与私钥
+.secrets/
+.ssh/
+.aws/
+*.pem
+*.key
+*.p12
+*.pfx
+
 # =========================
 # 配置文件中的记录/缓存
 # =========================
@@ -83,6 +106,13 @@ config/state.json.bak
 config/chat_history.json.bak
 config/chat_memory.json.bak
 config/state.tmp
+config/experience.json
+config/experience.json.bak
+config/experience.tmp
+config/working_memory.json
+config/working_memory.tmp
+config/working_memory.json.bak
+config/chat_history.consume.tmp
 config/chat_history.tmp
 config/chat_memory.tmp
 *.log

@@ -32,6 +32,7 @@ export default function ChatPanel({
   });
   const [following, setFollowing] = useState(true);
   const [seen, setSeen] = useState('');
+  const focusedNonce = useRef(null);
   const {
     messages,
     loadingHistory,
@@ -43,6 +44,11 @@ export default function ChatPanel({
   const latest = visible.at(-1);
   const latestVersion = latest ? `${messageKey(latest)}:${latest.content.length}` : '';
   const unread = !following && latestVersion !== seen;
+  useLayoutEffect(() => {
+    if (!session.focusMessage || focusedNonce.current === session.focusMessage.nonce) return;
+    const node = [...(list.current?.querySelectorAll('[data-message-key]') || [])].find(item => item.dataset.messageKey === session.focusMessage.id);
+    if (node) { focusedNonce.current = session.focusMessage.nonce; follow.current = false; node.scrollIntoView({ block: 'center' }); node.focus({ preventScroll: true }); }
+  }, [session.focusMessage, messages]);
   const toLatest = () => {
     follow.current = true;
     setFollowing(true);
@@ -124,7 +130,7 @@ export default function ChatPanel({
       <span>从一句话开始</span>
       <p>聊聊今天，或说说你此刻想做的事。</p>
     </div>}
-    <ol className="conversation-messages" aria-live="off">{visible.map(message => <li key={messageKey(message)} data-message-key={messageKey(message)} className={`message message-${message.role}`}>
+    <ol className="conversation-messages" aria-live="off">{visible.map(message => <li tabIndex={-1} key={messageKey(message)} data-message-key={messageKey(message)} className={`message message-${message.role}${session.focusMessage?.id === message.message_id ? ' message-highlight' : ''}`}>
         <div className="message-meta">
           <span>{message.role === 'ai' ? session.config?.display_name || '依鸣' : '你'}</span>
           <time>{messageTime(message.timestamp, session.config?.timezone)}</time>
@@ -132,9 +138,13 @@ export default function ChatPanel({
           {message.role === 'user' && <span className={`delivery delivery-${message.delivery}`}>{deliveryLabel[message.delivery]}</span>}
         </div>
         <p className="message-text">{message.content}</p>
+        {session.config?.capabilities?.player_records && <button className="quiet-button" disabled={!message.history_id && message.delivery !== 'persisted'} onClick={() => session.playerAction({ action: 'favorite', message_id: message.message_id, enabled: !session.config.experience?.favorites.some(item => item.message_id === message.message_id) }).catch(error => session.setNotice(error.message))}>{session.config.experience?.favorites.some(item => item.message_id === message.message_id) ? '取消收藏' : '收藏这条'}</button>}
         {message.role === 'ai' && <div className="message-actions">
           <button onClick={() => session.replay(message)} disabled={session.connection !== 'online'}>重播这句</button>
-          <button onClick={() => navigator.clipboard?.writeText(message.content).catch(() => session.setNotice('复制失败，请选择文字复制。'))}>复制</button>
+          <button onClick={() => {
+            if (!navigator.clipboard) { session.setNotice('浏览器未开放剪贴板，请选择文字复制。'); return; }
+            navigator.clipboard.writeText(message.content).catch(() => session.setNotice('复制失败，请选择文字复制。'));
+          }}>复制</button>
         </div>}
         {['failed', 'uncertain'].includes(message.delivery) && <div className="message-recovery">
           <p>{message.error || '尚未确认服务器是否接收；同步或重试时会核对同一消息标识。'}</p>
