@@ -154,10 +154,12 @@ class WorkingMemory:
             source = note['source']
             candidates.append({'kind': note['kind'], 'quote': note['quote'], 'status': note['status'],
                 'source_id': source['message_id'], 'speaker': source.get('role'), 'timestamp': source.get('timestamp'),
+                'source_type': source.get('source_type', 'quoted_dialogue'),
                 'completion_status': source.get('completion_status', 'completed'), 'resolution': note.get('resolution')})
         for item in reversed(data['sources'][-12:]):
             candidates.append({'kind': 'buffered_turn', 'quote': item['content'][:600], 'truncated': len(item['content']) > 600,
                 'source_id': item['message_id'], 'speaker': item.get('role'), 'timestamp': item.get('timestamp'),
+                'source_type': item.get('source_type', 'quoted_dialogue'),
                 'completion_status': item.get('completion_status', 'completed')})
         records, included = [], set()
         for record in candidates:

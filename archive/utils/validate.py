@@ -121,8 +121,13 @@ def validate_archive(archive_dir: str) -> tuple[bool, str]:
         try:
             with open(state_path, "r", encoding="utf-8") as f:
                 state = json.load(f)
+            if isinstance(state, dict) and 'role_continuity' in state:
+                from persona.continuity import load_continuity
+                load_continuity(state)
         except json.JSONDecodeError as e:
             return False, f"state.json 格式错误: {e}"
+        except ValueError as e:
+            return False, f"角色连续性记录错误: {e}"
 
         return True, ""
 

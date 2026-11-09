@@ -1,8 +1,42 @@
 """Structured scene facts and deterministic clock consistency checks."""
 import copy
 import re
+import math
 from datetime import datetime
 from core.time_utils import get_timezone, time_period
+
+
+def expire_user_presence(state, last_interaction, now):
+    """After a long dialogue gap, last known presence stops being current fact.
+
+    This uses world-clock idle time, not GPS or a per-location observation model.
+    Contact details and the character's location are durable independent facts.
+    """
+    result = copy.deepcopy(state)
+    if any(type(value) not in (int, float) or not math.isfinite(value) for value in (last_interaction, now)):
+        return result
+    gap = now - last_interaction
+    if gap < 0:
+        return result  # Restore owns the clock and the archived scene.
+    try:
+        current_date = datetime.fromtimestamp(now, get_timezone()).date()
+        previous_date = datetime.fromtimestamp(last_interaction, get_timezone()).date()
+    except (ValueError, OverflowError, OSError):
+        return result
+    changed_day = current_date != previous_date
+    if gap < 1800 and (not changed_day or gap < 300):
+        return result
+    scene = normalize_scene(state)
+    if scene['user_location'] is None and scene['communication_mode'] == 'unknown':
+        return result
+    result['last_known_presence'] = {'user_location': scene['user_location'],
+        'communication_mode': scene['communication_mode'],
+        'last_interaction': datetime.fromtimestamp(last_interaction, get_timezone()).isoformat(),
+        'basis': 'last_dialogue_before_gap'}
+    scene.update(user_location=None, communication_mode='unknown')
+    result['scene'] = scene
+    result['客观情境'] = f"{scene['character_location'] or '角色位置待确认'}；用户当前所在地未知"
+    return result
 
 UNKNOWN_SCENE = {'character_location': None, 'user_location': None,
                  'communication_mode': 'unknown', 'remote_contact_confirmed': False}

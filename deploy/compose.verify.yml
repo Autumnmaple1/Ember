@@ -1,0 +1,17 @@
+# Isolated infrastructure verification. Never use the synthetic provider for real chat.
+services:
+  fixture:
+    image: ember-service:dev
+    command: ["python", "/fixture.py"]
+    volumes:
+      - ./utils/service_model_fixture.py:/fixture.py:ro
+    read_only: true
+    tmpfs: [/tmp]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/health')"]
+      interval: 2s
+      retries: 20
+  ember:
+    depends_on:
+      fixture:
+        condition: service_healthy

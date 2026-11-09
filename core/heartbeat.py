@@ -20,6 +20,7 @@ class Heartbeat:
         if self._thread is None or not self._thread.is_alive():
             self._stop_event.clear()
             self._pause_event.clear()
+            self._is_paused = False
             self._thread = threading.Thread(target=self._run, daemon=True)
             self._thread.start()
             logger.debug("心跳线程已启动")

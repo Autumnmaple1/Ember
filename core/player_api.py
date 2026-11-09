@@ -10,6 +10,9 @@ from pydantic import BaseModel, Field
 from memory.postgres import connection
 from core.time_utils import to_epoch
 from core.shared_project import ProjectConflict
+from core.shared_material import continuation_items
+from typing import Literal
+from pydantic import ConfigDict, StrictBool, field_validator, model_validator
 from memory.journal import append_event_once
 
 
@@ -85,6 +88,7 @@ class PlayerAction(BaseModel):
     expected_version: int | None = Field(default=None, ge=0)
     choice: str = Field(default='', max_length=40)
     note: str = Field(default='', max_length=1000)
+    quote: str = Field(default='', max_length=6000)
 
 
 class ArchiveTaskRequest(BaseModel):
@@ -94,8 +98,49 @@ class ArchiveTaskRequest(BaseModel):
     epoch: str
 
 
-def install_player_api(server):
+class SceneFacts(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    character_location: str | None = Field(max_length=150)
+    user_location: str | None = Field(max_length=150)
+    communication_mode: Literal['face_to_face', 'remote', 'unknown']
+    remote_contact_confirmed: StrictBool
+
+    @field_validator('character_location', 'user_location')
+    @classmethod
+    def location(cls, value):
+        if value is None:
+            return None
+        value = value.strip()
+        if any(ord(char) < 32 for char in value):
+            raise ValueError('位置不能包含换行或控制字符')
+        return value or None
+
+    @model_validator(mode='after')
+    def consistent(self):
+        if self.communication_mode == 'face_to_face' and (
+                not self.character_location or self.character_location != self.user_location):
+            raise ValueError('面对面需要双方位置已知且相同')
+        if self.communication_mode == 'remote' and not self.remote_contact_confirmed:
+            raise ValueError('故事中的远程交流需要确认联系方式；网页主动发言不受此限制')
+        return self
+
+
+class SceneConfirmationRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    epoch: str = Field(min_length=1, max_length=80)
+    expected_scene: SceneFacts
+    scene: SceneFacts
+
+
+def install_player_api(server, *, history_reader=None, memory_reader=None):
     app = server.app
+    query_history = history_reader or history_query
+
+    def read_source(key):
+        for message in query_history(message_id=key):
+            if message['message_id'] == key:
+                return message
+        raise ValueError('来源消息不存在，请先同步已保存记录')
 
     def readable(epoch=None):
         if server.event_bus.paused or server.archive_jobs.busy or (epoch and epoch != server.protocol.epoch):
@@ -104,6 +149,27 @@ def install_player_api(server):
     def check_epoch(epoch):
         if epoch != server.protocol.epoch:
             raise HTTPException(409, '世界版本已变化，请同步后重试')
+
+    @app.post('/scene')
+    async def confirm_scene(request: SceneConfirmationRequest):
+        def save():
+            check_epoch(request.epoch)
+            if not server.event_bus.operation_lock.acquire(blocking=False):
+                raise HTTPException(409, '当前任务正在更新状态，请稍后重试')
+            try:
+                check_epoch(request.epoch)
+                if server.event_bus.paused or server.archive_jobs.busy or server.event_bus.pending_dialogues or server.brain._is_processing:
+                    raise HTTPException(409, '请等待当前对话或存读档完成后保存场景')
+                if request.expected_scene.model_dump() != server.state_manager.scene_snapshot()['scene']:
+                    raise HTTPException(409, '场景已发生变化，请载入最新场景后重新确认')
+                try:
+                    state = server.state_manager.confirm_scene(request.scene.model_dump())
+                except OSError as exc:
+                    raise HTTPException(503, '场景保存失败，原状态已保留，请重试') from exc
+                return {'state': state, **server.protocol.snapshot()}
+            finally:
+                server.event_bus.operation_lock.release()
+        return await asyncio.to_thread(save)
 
     @app.get('/sync')
     async def sync(epoch: str = '', after: int = Query(0, ge=0)):
@@ -129,7 +195,7 @@ def install_player_api(server):
         epoch = server.protocol.epoch
         readable(epoch)
         try:
-            result = await asyncio.to_thread(history_query, q, day, 50, before_id)
+            result = await asyncio.to_thread(query_history, q, day, 50, before_id)
             readable(epoch)
             if epoch != server.protocol.epoch:
                 raise HTTPException(409, '世界版本已变化，请重试')
@@ -146,7 +212,7 @@ def install_player_api(server):
         epoch = server.protocol.epoch
         readable(epoch)
         try:
-            items = await asyncio.to_thread(history_query, message_id=message_id)
+            items = await asyncio.to_thread(query_history, message_id=message_id)
             readable(epoch)
             if epoch != server.protocol.epoch:
                 raise HTTPException(409, '世界版本已变化，请重试')
@@ -166,7 +232,7 @@ def install_player_api(server):
         try:
             epoch = server.protocol.epoch
             readable(epoch)
-            result = await asyncio.to_thread(read)
+            result = await asyncio.to_thread(memory_reader or read)
             readable(epoch)
             if epoch != server.protocol.epoch:
                 raise HTTPException(409, '世界版本已变化，请重试')
@@ -187,7 +253,7 @@ def install_player_api(server):
             try:
                 check_epoch(request.epoch)
                 experience = server.experience
-                source = source_message(request.message_id) if request.message_id else None
+                source = read_source(request.message_id) if request.message_id else None
                 if request.action == 'favorite':
                     if not source:
                         raise ValueError('收藏需要已保存的原始消息')
@@ -198,6 +264,12 @@ def install_player_api(server):
                     result = experience.agreement(request.title, source, request.when, request.location)
                 elif request.action == 'agreement_status':
                     result = experience.update_agreement(request.record_id, request.status)
+                elif request.action == 'agreement_reminder':
+                    from config.settings import settings
+                    if request.enabled and settings.PROACTIVE_POLICY != 'events_v1':
+                        raise ValueError('当前主动策略不支持网页提醒，请切换 events_v1 后开启')
+                    result = experience.set_reminder(request.record_id, request.enabled, request.when,
+                        now=server.event_bus.logical_now)
                 elif request.action == 'quiet':
                     result = experience.set_quiet(request.enabled)
                     server.event_bus.quiet = request.enabled
@@ -207,6 +279,10 @@ def install_player_api(server):
                             raise ValueError('请等待已接收的对话完成后暂停世界')
                         server.event_bus.pause_world(request.enabled)
                     result = experience.snapshot()
+                elif request.action.startswith('material_'):
+                    result = experience.material(request.action.removeprefix('material_'), source=source,
+                        title=request.title, quote=request.quote, record_id=request.record_id,
+                        logical_time=server.event_bus.formatted_logical_now)
                 elif request.action.startswith('project_'):
                     if server.event_bus.world_paused:
                         raise ProjectConflict('世界已暂停，请在设置中继续后再操作手册')
@@ -219,7 +295,7 @@ def install_player_api(server):
                         raise ValueError('共同自习需要一条已完成的角色回复作为来源')
                     result = experience.activity(request.action, duration=request.duration, source=source,
                         shared=request.shared, summary=request.summary, logical_time=server.event_bus.formatted_logical_now)
-                server.safe_broadcast({'type': 'experience.update', 'experience': result})
+                server.safe_broadcast({'type': 'experience.update', 'experience': result, 'continuation': continuation_items(result)})
                 if request.action in ('complete', 'interrupt', 'project_finish', 'project_edit', 'project_abandon') and hasattr(server, 'memory') and hasattr(server.memory, 'working'):
                     records = result['projects'] if request.action.startswith('project_') else result['activities']
                     record = next((x for x in records if x['id'] == request.record_id), None) if request.record_id else records[-1]
@@ -232,7 +308,8 @@ def install_player_api(server):
                                 'source_type': 'player_activity_record'}
                             append_event_once(row)
                             server.memory.working.capture([row])
-                return {'experience': result, 'world_paused': server.event_bus.world_paused, **server.protocol.snapshot()}
+                return {'experience': result, 'continuation': continuation_items(result),
+                    'world_paused': server.event_bus.world_paused, **server.protocol.snapshot()}
             except ProjectConflict as exc:
                 raise HTTPException(409, str(exc)) from exc
             except ValueError as exc:

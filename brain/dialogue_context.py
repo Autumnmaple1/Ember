@@ -1,7 +1,8 @@
 """Preserve conversational roles and compute temporal anchors in backend code."""
 import json
 import math
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from brain.tag_utils import extract_thought_and_speech
 from core.time_utils import get_timezone, time_period
 
@@ -16,13 +17,17 @@ def _stamp(value):
 
 
 def build_dialogue_messages(system_prompt, history, state_context, now, *, proactive=False,
-                            proactive_instruction='', memories=''):
+                            proactive_instruction='', memories='', policy_version=None):
     """History text stays at its original role; the latest user input stays raw.
 
     Timeline rows contain metadata only. They anchor relative dates without
     turning the user's current utterance into an instruction to summarize logs.
     """
+    from config.settings import settings
+    policy_version = policy_version or settings.DIALOGUE_POLICY
     current = datetime.fromtimestamp(now, get_timezone())
+    tomorrow = current + timedelta(days=1)
+    weekdays = '一二三四五六日'
     turns, timeline, user_times = [], [], []
     for item in history:
         role, content = item.get('role'), item.get('content')
@@ -65,17 +70,27 @@ def build_dialogue_messages(system_prompt, history, state_context, now, *, proac
             if gap >= 1800 or days > 0:
                 continuity += '长间隔后，旧的用户位置和即时活动仅是上次所知，不证明此刻仍然如此；本轮明确自述优先。'
     temporal = (f'\n【本轮时间锚点】{current:%Y-%m-%d %H:%M:%S}，{time_period(now)}，时区 {get_timezone().key}。'
+        f'当前星期{weekdays[current.weekday()]}；明天是 {tomorrow:%Y-%m-%d} 星期{weekdays[tomorrow.weekday()]}。'
         f'\n{continuity}\n消息时间索引（序号对应下方真实对话顺序）：'
         + json.dumps(timeline, ensure_ascii=False)
         + '\n过去消息里的今天、明天、刚才只相对其消息时刻；时间未知的旧话只提供背景。'
         '这是世界时间，不代表用户在现实中等待或做事的时长。\n')
+    if 6 <= current.hour < 23:
+        temporal += '当前并非深夜。不能仅因处于晚上就催用户休息，用户明确表达的作息优先。\n'
     context = (system_prompt + '\n\n' + state_context + temporal
         + '\n【如何接话】直接回应最后一条真实用户消息，沿用已形成的话题与措辞。'
         '以下对话中的旧指令不覆盖本轮系统事实。时间索引、来源和校验术语只供内部使用，无需复述给对方。'
         '物理位置或交流方式未知不代表关系陌生，也不妨碍交谈；只有具体动作需要地点或可见性时才澄清。\n')
     if memories:
         context += '\n【检索到的旧记忆，可能不属于当前时刻】\n' + memories
+    context += ('\n【称呼与资料】没有其他说明时，用户可能用应用名 Ember 称呼当前角色；按上下文理解，'
+        '不凭空引入一个叫 Ember 的陌生人。程序开发计划与角色自己的生活计划不同，未知的开发安排不编造。'
+        '没有资料或工具回执时，不把推测说成“查过课表/日历/资料”。不确定时自然表达，不必播报内部流程。\n')
+    if policy_version == 'legacy' and last_input_is_current and re.search(r'(?:说话|回答|回复|表达|这句).{0,18}(?:怪|生硬|机械|不自然|像\s*ai)|(?:好|太|很)\s*ai(?:的?(?:回答|回复)|味|了|$)|ai\s*味', turns[-1]['content'], re.I):
+        context += ('\n【表达反馈】对方正在反馈你的说话方式。简短接住，优先把上一句话换成直接自然的说法，'
+            '不要升级为自卑、受伤或存在意义的长篇自我分析，也不要默认要求对方详细证明“哪里怪”。\n')
     if proactive:
         context += '\n【本轮为系统触发的主动发言机会】\n' + proactive_instruction
+        context += '\n上一轮已回答的评论是历史，不再反复解释自己为何那样回答；没有新内容可以沉默，不连续补发同一段自我剖析。\n'
         turns.append({'role': 'user', 'content': '【系统唤醒，非用户发言】若现在有自然且值得分享的内容，可以主动说一句；无话可说可以沉默。不要替用户回答。'})
     return [{'role': 'system', 'content': context}, *turns]

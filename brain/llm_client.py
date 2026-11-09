@@ -2,6 +2,8 @@ from openai import OpenAI
 import logging
 import json
 import threading
+import os
+from core.service_policy import reserve, finish
 from json_repair import repair_json
 from config.settings import settings
 from core.turns import TurnCancelled
@@ -55,6 +57,11 @@ class LLMClient:
                 base_url=settings.EMBEDDING_MODEL.base_url,
             )
             self._initialized = True
+            if os.getenv('EMBER_AUTH_REQUIRED', '').lower() == 'true':
+                # Explicit application retries are metered; avoid hidden SDK retries.
+                self.large_client = self.large_client.with_options(max_retries=0)
+                self.small_client = self.small_client.with_options(max_retries=0)
+                self.embedding_client = self.embedding_client.with_options(max_retries=0)
 
     @classmethod
     def _reset_instance(cls):
@@ -79,7 +86,7 @@ class LLMClient:
     def _log_usage(self, usage, model_name: str, call_type: str = "dialogue"):
         """记录 Token 消耗日志，兼容 OpenAI 和 Gemini 两种响应格式，包含缓存信息和调用类型
 
-        call_type: dialogue(对话) | state_update(状态更新) | idle_evolve(闲置演化) | memory_query(记忆检索) | memory_encode(记忆编码)
+        call_type: dialogue(对话) | proactive(主动发言) | state_update(状态更新) | idle_evolve(闲置演化) | memory_query(记忆检索) | memory_encode(记忆编码)
         """
         if usage is None:
             logger.debug("[LLM Usage] usage 为空")
@@ -149,6 +156,7 @@ class LLMClient:
 
         max_retries = 2
         for attempt in range(max_retries):
+            ticket = reserve('chat', model_config.name, call_type)
             try:
                 response = client.chat.completions.create(
                     model=model_config.name,
@@ -156,15 +164,17 @@ class LLMClient:
                     extra_body={"enable_thinking": False},
                     stream=False,
                     temperature=settings.LLM_TEMPERATURE,
-                    timeout=timeout,
+                    timeout=min(timeout, float(os.getenv('EMBER_REQUEST_TIMEOUT', '60'))),
                 )
                 full_response = response.choices[0].message.content
                 usage = getattr(response, "usage", None) or getattr(
                     response, "usage_metadata", None
                 )
                 self._log_usage(usage, model_config.name, call_type)
+                finish(ticket, usage)
                 return remove_reasoning(full_response)
             except Exception as e:
+                finish(ticket, status='failed')
                 logger.error(
                     f"OneChat Error (attempt {attempt + 1}/{max_retries}): {e}"
                 )
@@ -184,6 +194,9 @@ class LLMClient:
         )
 
         response = None
+        ticket = reserve('chat', model_config.name, call_type)
+        outcome = 'failed'
+        usage = None
         try:
             if cancel_token:
                 cancel_token.check()
@@ -194,7 +207,7 @@ class LLMClient:
                 stream=True,
                 stream_options={"include_usage": True},
                 temperature=settings.LLM_TEMPERATURE,
-                timeout=60,
+                timeout=float(os.getenv('EMBER_REQUEST_TIMEOUT', '60')),
             )
             if cancel_token and hasattr(response, 'close'):
                 cancel_token.attach_stream(response.close)
@@ -228,6 +241,7 @@ class LLMClient:
                 or getattr(response, "usage_metadata", None)
             )
             self._log_usage(usage, model_config.name, call_type)
+            outcome = 'completed'
 
         except TurnCancelled:
             raise
@@ -238,6 +252,7 @@ class LLMClient:
             yield f"[Error]: {str(e)}"
             logger.error(f"Streaming Chat Error: {e}")
         finally:
+            finish(ticket, usage, outcome)
             if cancel_token:
                 cancel_token.detach_stream()
             if response is not None and hasattr(response, 'close'):
@@ -245,13 +260,18 @@ class LLMClient:
 
     def get_embedding(self, model_config, text: str):
         client = self.embedding_client
+        ticket = None
         try:
+            ticket = reserve('embedding', model_config.name, 'embedding')
             response = client.embeddings.create(
                 model=model_config.name,
                 input=text,
                 dimensions=1536,
+                timeout=float(os.getenv('EMBER_REQUEST_TIMEOUT', '60')),
             )
+            finish(ticket, getattr(response, 'usage', None))
             return response.data[0].embedding
         except Exception as e:
+            finish(ticket, status='failed')
             logger.error(f"Get Embedding Error: {e}")
             return None

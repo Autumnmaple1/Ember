@@ -25,6 +25,7 @@ from archive.importers.base import ImportResult
 def make_server():
     server = object.__new__(EmberServer)
     server.app, server.event_bus = FastAPI(), EventBus()
+    server.event_bus.proactive_channel = 'web'
     server.protocol, server.manager = WorldProtocol(), ConnectionManager()
     server.manager.protocol = server.protocol
     server.experience = Experience()

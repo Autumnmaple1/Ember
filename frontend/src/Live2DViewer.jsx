@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import * as PIXI from 'pixi.js';
 import { Live2DModel } from 'pixi-live2d-display';
 import { LIVE2D_CONFIG } from './live2dConfig';
+import { speechAnalyser } from './speechAudio';
 
 // Expose PIXI to window for the plugin
 window.PIXI = PIXI;
@@ -17,8 +18,6 @@ const Live2DViewer = ({ currentEmotion, audio, modelPath, lowPerformance = false
     const [loadAttempt, setLoadAttempt] = useState(0);
 
     // 音频分析相关
-    const analyserRef = useRef(null);
-    const audioContextRef = useRef(null);
     const lastValueRef = useRef(0);
     const lastTargetRef = useRef(0); // 预平滑音频输入
     const lastFormRef = useRef(0); // 嘴型(MouthForm)平滑
@@ -29,31 +28,9 @@ const Live2DViewer = ({ currentEmotion, audio, modelPath, lowPerformance = false
     useEffect(() => {
         if (!audio || !modelLoaded || !modelRef.current || !LIVE2D_CONFIG.lipSync.enabled) return;
 
-        // 初始化 AudioContext
-        if (!audioContextRef.current) {
-            const AudioContext = window.AudioContext || window.webkitAudioContext;
-            if (!AudioContext) return;
-            audioContextRef.current = new AudioContext();
-        }
-        const context = audioContextRef.current;
-        if (context.state === 'suspended') context.resume().catch(() => {});
-
-        // 创建分析器
-        if (!analyserRef.current) {
-            analyserRef.current = context.createAnalyser();
-            analyserRef.current.fftSize = 512; // 增加分辨率以便区分频率
-        }
-        const analyser = analyserRef.current;
-
-        // 尝试连接音频源
-        let source;
-        try {
-            source = context.createMediaElementSource(audio);
-            source.connect(analyser);
-            analyser.connect(context.destination);
-        } catch {
-            // 已连接则忽略
-        }
+        // Playback owns the graph; model reloads and view changes must not mute it.
+        const analyser = speechAnalyser(audio);
+        if (!analyser) return;
 
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
         const { gain, minVolume, humanly, spring, phoneme } = LIVE2D_CONFIG.lipSync;
@@ -147,8 +124,6 @@ const Live2DViewer = ({ currentEmotion, audio, modelPath, lowPerformance = false
 
         return () => {
             ticker.remove(updateMouth);
-            source?.disconnect();
-            analyser.disconnect();
             const coreModel = modelRef.current?.internalModel?.coreModel;
             if (coreModel) {
                 coreModel.setParameterValueById('ParamMouthOpenY', 0);
@@ -248,7 +223,6 @@ const Live2DViewer = ({ currentEmotion, audio, modelPath, lowPerformance = false
         return () => { document.removeEventListener('visibilitychange', update); media.removeEventListener('change', update); };
     }, [modelLoaded, reduceMotion, audio]);
 
-    useEffect(() => () => { audioContextRef.current?.close().catch(() => {}); }, []);
 
     useEffect(() => {
         if (modelLoaded && modelRef.current && ['normal', 'happy', 'sad', 'angry', 'questioning'].includes(currentEmotion)) {

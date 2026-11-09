@@ -1,12 +1,16 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import './App.css';
-const Live2DViewer = lazy(() => import('./Live2DViewer'));
+const Live2DViewer = lazy(() => import('./Live2DViewer').catch(() => ({ default: function CharacterUnavailable() {
+  return <div role="status"><p>角色暂时无法显示，文字对话仍可使用。</p><button onClick={() => window.location.reload()}>刷新后重试角色</button></div>;
+} })));
 const ArchiveModal = lazy(() => import('./ArchiveModal'));
 const FocusPanel = lazy(() => import('./components/FocusPanel'));
 const MemoriesPanel = lazy(() => import('./components/MemoriesPanel'));
 const TimeSettings = lazy(() => import('./components/TimeSettings'));
 const SceneConfirmation = lazy(() => import('./components/SceneConfirmation'));
 const SharedProjectPanel = lazy(() => import('./components/SharedProjectPanel'));
+const ContinuationPanel = lazy(() => import('./components/ContinuationPanel'));
+const ServicePanel = lazy(() => import('./components/ServicePanel'));
 import { scenePresentation } from './scenePresentation';
 import ChatPanel from './components/ChatPanel';
 import Modal from './components/Modal';
@@ -50,11 +54,17 @@ export default function App() {
   const [reduceMotion, setReduceMotion] = useState(() => readPreference('ember.reduceMotion.v1', false) === true);
   const [sendShortcut, setSendShortcut] = useState(() => readPreference('ember.sendShortcut.v1', 'enter'));
   const [panel, setPanel] = useState(null);
+  const [proactiveWorking, setProactiveWorking] = useState(false);
+  const [proactivePending, setProactivePending] = useState(null);
+  const [proactiveError, setProactiveError] = useState('');
   const [composing, setComposing] = useState(false);
   const [queuedText, setQueuedText] = useState(null);
   const queueVersion = useRef(0);
   const input = useRef(null);
   const session = useEmberSession(autoPlay);
+  const changeAutoPlay = enabled => { if (enabled) session.prepareAudio(); setAutoPlay(enabled); };
+  const [materialSource, setMaterialSource] = useState(null);
+  const [memoryTab, setMemoryTab] = useState('history');
   const {
     config,
     playback, setVolume: applyVolume
@@ -86,6 +96,7 @@ export default function App() {
       setPanel(current => current === 'archive' ? current : null);
     } else writePreference(`ember.draft.${session.worldEpoch}`, draftRef.current);
     draftEpoch.current = session.worldEpoch;
+    setMaterialSource(null);
     writePreference('ember.lastEpoch.v1', session.worldEpoch);
   }, [session.worldEpoch]);
   useEffect(() => { applyVolume(volume); writePreference('ember.volume.v1', volume); }, [volume, applyVolume]);
@@ -139,13 +150,15 @@ export default function App() {
     <nav aria-label="主要功能">
       <button aria-pressed={!panel} onClick={() => setPanel(null)}>陪伴</button>
       <button aria-pressed={panel === 'projects'} onClick={() => setPanel('projects')}>一起做点事</button>
-      <button aria-pressed={panel === 'memories'} onClick={() => setPanel('memories')}>回忆</button>
+      <button aria-pressed={panel === 'memories'} onClick={() => { setMemoryTab('history'); setPanel('memories'); }}>回忆</button>
       <button aria-pressed={panel === 'archive'} onClick={() => setPanel('archive')}>存档</button>
       <button aria-pressed={panel === 'settings'} onClick={() => setPanel('settings')}>设置</button>
     </nav>
     <span className={`connection connection-${session.connection}`} role="status">{connectionLabels[session.connection]}</span>
   </header>
+  {config?.demo_mode && <div className="demo-mode-notice" role="note">中期展示模式 · 预设台词与合成记忆 · 活动规则真实执行 · 不调用模型、向量检索或语音服务</div>}
   <div className="world-bar">
+    {config?.capabilities?.shared_materials && <button onClick={() => { setMaterialSource(null); setPanel('continuation'); }}>接着上次{config.continuation?.length ? ` · ${config.continuation.length}` : ''}</button>}
     <div className="world-facts">
       <time>{config?.logical_time || '正在同步世界时间'}</time>
       <span>{scene.character_location || '角色位置待确认'}</span>
@@ -158,13 +171,13 @@ export default function App() {
     </div>
   </div>
   {config?.status?.recovery_required && <div className="service-notice" role="alert">上次恢复未完成，世界已暂停以保留现有进度。请选择已知有效的存档恢复。<button onClick={() => setPanel('archive')}>打开恢复入口</button></div>}
-  {(session.configError || config?.status?.database?.ready === false || config?.status?.long_term_memory?.ready === false || config?.status?.scene?.state === 'needs_confirmation') && <div className="service-notice" role="status">{session.configError}{config?.status?.database?.ready === false && ' 聊天保存服务异常，消息可能仍在等待保存。'}{config?.status?.long_term_memory?.ready === false && ' 长期记忆暂不可用。'}{config?.status?.scene?.state === 'needs_confirmation' && ' 当前活动待确认，可以在对话中说明。'}</div>}
+  {(session.configError || config?.status?.database?.ready === false || config?.status?.long_term_memory?.ready === false || config?.status?.scene?.state === 'needs_confirmation') && <div className="service-notice" role="status">{session.configError}{config?.status?.database?.ready === false && ' 聊天保存服务异常，消息可能仍在等待保存。'}{config?.status?.long_term_memory?.ready === false && ' 长期记忆暂不可用。'}{config?.status?.scene?.state === 'needs_confirmation' && ' 当前活动待确认，可查看当前情境或在对话中说明。'}</div>}
   <main id="main" className="companion-layout">
     <section className={`character-stage scene-${scenery.id} period-${scenery.period}`} style={scenery.image ? { '--scene-image': `url(${scenery.image})` } : undefined} aria-label={`${name}的舞台`}>
       <div className="stage-caption">
         <span className="eyebrow">WITH YOU</span>
         <h1>{name}</h1>
-        <p>{scene.communication_mode === 'remote' ? '隔着屏幕，也可以好好聊聊。' : scene.communication_mode === 'face_to_face' ? '留一点时间，给眼前的相处。' : '先确认此刻的情境，再慢慢聊。'}</p>
+        <p>{scene.communication_mode === 'remote' ? '隔着屏幕，也可以好好聊聊。' : scene.communication_mode === 'face_to_face' ? '留一点时间，给眼前的相处。' : '接着之前的话题，慢慢聊。'}</p>
       </div>
       <div className="stage-atmosphere" aria-hidden="true" />
       <Suspense fallback={<p role="status">正在准备角色…</p>}><Live2DViewer currentEmotion={session.emotion || config?.presentation?.emotion} audio={playback.audio} modelPath={config?.live2d?.model_path} lowPerformance={lowPerformance} reduceMotion={reduceMotion} /></Suspense>
@@ -175,7 +188,8 @@ export default function App() {
     </section>
     {view === 'focus' && <Suspense fallback={<p role="status">正在准备专注视图…</p>}><FocusPanel key={session.worldEpoch || 'legacy'} session={session} /></Suspense>}
     <div className="dialogue-workspace">
-      <ChatPanel key={session.worldEpoch || 'legacy'} session={session} onEdit={edit} fontSize={fontSize} />
+      <ChatPanel key={session.worldEpoch || 'legacy'} session={session} onEdit={edit} fontSize={fontSize}
+        onPinMaterial={message => { setMaterialSource(message); setPanel('continuation'); }} />
       <div className="session-feedback" role="status" aria-live="polite">
         <span className={session.busy ? 'working-label' : ''}>{config?.world_paused ? '世界已暂停，可在设置中继续' : session.syncingWorld ? '正在恢复当前世界…' : paused ? '场景正在准备或存读档，请稍候' : session.busy ? session.phase === 'idle' ? '正在处理本轮对话…' : phaseLabels[session.phase] : phaseLabels.idle}</span>
         {session.busy && <small>可以编辑下一条草稿</small>}
@@ -194,6 +208,7 @@ export default function App() {
       </div>}
       {previousDraft && showDraftRecovery && <div className="inline-notice" role="status"><span>上次会话的草稿已保留，不会自动发送。</span><button onClick={recoverDraft}>取回旧草稿</button><button onClick={() => setShowDraftRecovery(false)}>暂不取回</button></div>}
       {playback.error && <p className="audio-error" role="status">{playback.error}</p>}
+      {playback.canResume && <button type="button" onClick={session.resumeAudio}>启用声音并播放</button>}
       <form className="composer" onSubmit={send}>
         <label htmlFor="message-input" className="sr-only">对{name}说</label>
         <textarea id="message-input" ref={input} value={draft} rows={3} placeholder={`对${name}说……`} onChange={event => setDraft(event.target.value)} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)} onKeyDown={event => {
@@ -201,7 +216,7 @@ export default function App() {
           }} />
         <div className="composer-toolbar">
           <div className="audio-controls">
-            <button type="button" aria-pressed={autoPlay} onClick={() => setAutoPlay(value => !value)}>{autoPlay ? '自动声音：开' : '自动声音：关'}</button>
+            <button type="button" aria-pressed={autoPlay} onClick={() => changeAutoPlay(!autoPlay)}>{autoPlay ? '自动声音：开' : '自动声音：关'}</button>
             {playback.state !== 'idle' && <button type="button" onClick={session.stopAudio}>{playback.state === 'loading' ? '取消等待声音' : '停止声音'}</button>}
             {['playing', 'paused'].includes(playback.state) && <button type="button" onClick={session.toggleAudioPause}>{playback.state === 'paused' ? '继续播放' : '暂停播放'}</button>}
           </div>
@@ -217,11 +232,31 @@ export default function App() {
     </div>
   </main>
   {panel === 'settings' && <Modal title="设置" onClose={() => setPanel(null)}>
+    {config?.service?.enabled && <Suspense fallback={<p>正在读取连接…</p>}><ServicePanel status={config.service} /></Suspense>}
+    {config?.capabilities?.web_proactive && config.experience && <section className="settings-section">
+      <h3>主动陪伴</h3>
+      <label className="setting-row"><span>允许网页内主动发言</span><input type="checkbox" checked={proactivePending ?? !config.experience.quiet}
+        disabled={proactiveWorking} onChange={async event => {
+          const enabled = event.target.checked;
+          setProactiveWorking(true); setProactivePending(enabled); setProactiveError('');
+          try { await session.playerAction({ action: 'quiet', enabled: !enabled }); }
+          catch (failure) { setProactiveError(failure.message); }
+          finally { setProactiveWorking(false); setProactivePending(null); }
+        }} /></label>
+      {proactiveError && <p role="alert">{proactiveError}</p>}
+      <p className="muted">与勿扰设置同步。位置未知、故事中未交换联系方式，也可以在网页里主动聊聊；仍遵守睡眠和不打扰规则。</p>
+      {config.status?.proactive?.last_decision && <p role="status">{({ quiet: '当前为勿扰，暂停主动消息。', sleeping: '她正在休息，暂不主动发言。',
+        paused: '当前任务结束后再考虑主动发言。', offline: '连接网页后再接收合适的新消息。', awaiting_user: '已留下一条消息，等你接着聊。',
+        already_attempted: '这条话题已处理，等新的话题或进展。', storage_error: '主动消息记录不可用，请检查后端日志。',
+        minimum_gap: '刚刚联系过，留一些接话时间。', conversation_cooldown: '稍后有新想法时再聊。', hourly_budget: '今天这一小时已聊得较多，先安静陪伴。',
+        same_topic: '这件事已经提过，等新的进展。', ready: '会在有合适内容时自然开口，不保证定时发言。' })[config.status.proactive.last_decision.reason] || '正在留意合适的话题。'}</p>}
+      <p className="muted">仅在 Ember 内留下消息，不会发送微信或电话。是否自动读出由声音开关控制。</p>
+    </section>}
     <section className="settings-section">
       <h3>声音与文字</h3>
       <label className="setting-row">
         <span>自动播放回复声音</span>
-        <input type="checkbox" checked={autoPlay} onChange={event => setAutoPlay(event.target.checked)} />
+        <input type="checkbox" checked={autoPlay} onChange={event => changeAutoPlay(event.target.checked)} />
       </label>
       <p className="muted">关闭会停止当前声音并清空待播队列。每条回复仍可手动重播。</p>
       <label className="setting-row" htmlFor="font-size">
@@ -267,16 +302,19 @@ export default function App() {
       <dd>{scene.user_location || '未知'}</dd>
       <dt>交流方式</dt>
       <dd>{modes[scene.communication_mode] || modes.unknown}</dd>
-      <dt>远程联系方式</dt>
+      <dt>故事中的远程联系方式</dt>
       <dd>{scene.remote_contact_confirmed ? '已确认' : '尚未确认'}</dd>
     </dl>
     <p className="scene-description">{state['客观情境'] || '场景尚在同步。'}</p>
-    <p className="muted">如有变化，请在对话中说明你的移动或交流方式。</p>
-    <button onClick={() => edit('我想确认一下我们现在的位置和交流方式。')}>在对话中确认</button>
-    <Suspense fallback={<p>正在加载场景确认…</p>}><SceneConfirmation scene={scene} onEdit={edit} /></Suspense>
+    {config?.capabilities?.direct_scene ? <Suspense fallback={<p>正在加载场景确认…</p>}><SceneConfirmation
+      key={session.worldEpoch || 'legacy'} scene={scene} onSave={session.saveScene}
+      blockedReason={session.syncingWorld ? '正在同步当前场景，填写内容会保留，请稍后保存。'
+        : config?.status?.paused ? '正在存读档，填写内容会保留，完成后可保存。'
+          : session.busy ? '当前回复或场景更新尚未结束，填写内容会保留，请稍后保存。' : ''} /></Suspense>
+      : <p role="status">请更新并重启后端，以支持直接保存场景。</p>}
   </Modal>}
   {panel === 'memories' && <Modal title="回忆" onClose={() => setPanel(null)}>
-    {config?.capabilities?.player_records ? <Suspense fallback={<p>正在加载回忆…</p>}><MemoriesPanel session={session} onClose={() => setPanel(null)} onEdit={edit} /></Suspense> : <p>请使用配套后端以查看回忆和来源。</p>}
+    {config?.capabilities?.player_records ? <Suspense fallback={<p>正在加载回忆…</p>}><MemoriesPanel initialTab={memoryTab} session={session} onClose={() => setPanel(null)} onEdit={edit} /></Suspense> : <p>请使用配套后端以查看回忆和来源。</p>}
   </Modal>}
   {panel === 'projects' && <Modal title="一起做点事" onClose={() => setPanel(null)}>
     <Suspense fallback={<p role="status">正在翻开手册…</p>}><SharedProjectPanel key={session.worldEpoch || 'legacy'} session={session} onEdit={text => edit(draft.trim() ? `${draft}\n${text}` : text)} /></Suspense>
@@ -298,6 +336,11 @@ export default function App() {
     <ol>{session.metrics.slice(-10).map((metric, index) => <li key={index}>本地反馈 {metric.local_feedback ?? '—'} ms · 接收确认 {metric.received ?? '—'} ms · 首段对白 {metric.first_speech ?? '—'} ms · 声音就绪 {metric.audio_ready ?? '—'} ms</li>)}</ol>
     <button onClick={session.clearMetrics}>清除本页计时</button>
   </Modal>}
+  {panel === 'continuation' && <Modal title="接着上次" onClose={() => { setPanel(null); setMaterialSource(null); }}><Suspense fallback={<p role="status">正在找回材料…</p>}>
+    <ContinuationPanel key={`${session.worldEpoch}:${materialSource?.message_id || 'saved'}`} session={session} source={materialSource} onPinned={() => setMaterialSource(null)} onEdit={text => edit(draft.trim() ? `${draft}\n${text}` : text)}
+      onNavigate={kind => { if (kind === 'study') { setView('focus'); setPanel(null); } else { setMemoryTab('agreements'); setPanel(kind === 'project' ? 'projects' : 'memories'); } }}
+      onLocate={async id => { try { await session.locateMessage(id); setPanel(null); } catch (error) { session.setNotice(error.message); } }} />
+  </Suspense></Modal>}
   {panel === 'archive' && <Suspense fallback={<p role="status">正在加载存档…</p>}><ArchiveModal isOpen onClose={() => setPanel(null)} session={session} /></Suspense>}
   </div>;
 }

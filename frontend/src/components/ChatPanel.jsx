@@ -18,7 +18,7 @@ function messageTime(timestamp, timezone) {
     hour12: false
   }).format(new Date(Number(timestamp)));
 }
-export default function ChatPanel({
+export default function ChatPanel({ onPinMaterial,
   session,
   onEdit,
   fontSize
@@ -139,6 +139,8 @@ export default function ChatPanel({
         </div>
         <p className="message-text">{message.content}</p>
         {session.config?.capabilities?.player_records && <button className="quiet-button" disabled={!message.history_id && message.delivery !== 'persisted'} onClick={() => session.playerAction({ action: 'favorite', message_id: message.message_id, enabled: !session.config.experience?.favorites.some(item => item.message_id === message.message_id) }).catch(error => session.setNotice(error.message))}>{session.config.experience?.favorites.some(item => item.message_id === message.message_id) ? '取消收藏' : '收藏这条'}</button>}
+        {message.role === 'user' && session.config?.capabilities?.shared_materials && <button className="quiet-button"
+          disabled={!message.history_id && message.delivery !== 'persisted'} onClick={() => onPinMaterial?.(message)}>一起看这段</button>}
         {message.role === 'ai' && <div className="message-actions">
           <button onClick={() => session.replay(message)} disabled={session.connection !== 'online'}>重播这句</button>
           <button onClick={() => {

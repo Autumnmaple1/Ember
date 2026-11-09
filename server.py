@@ -32,6 +32,7 @@ from core.world_protocol import WorldProtocol, protocol_serialized
 from core.archive_jobs import ArchiveJobs
 from core.player_api import install_player_api, presentation
 from core.shared_project import INTRO as PROJECT_INTRO
+from core.shared_material import continuation_items
 
 # Configure logging
 logger = get_logger(__name__)
@@ -74,10 +75,15 @@ class ConnectionManager:
 
 
 class EmberServer:
-    def __init__(self):
+    def __init__(self, service_runtime=None):
+        self.service_runtime = service_runtime
+        if os.getenv('EMBER_AUTH_REQUIRED', '').lower() == 'true' and service_runtime is None:
+            raise RuntimeError('常驻服务请使用 python -m service.run 启动')
         self.app = FastAPI()
         self.event_bus = EventBus()
+        self.event_bus.proactive_channel = 'web'
         self.manager = ConnectionManager()
+        self.event_bus.has_delivery_connection = lambda: bool(self.manager.active_connections)
         self.protocol = WorldProtocol()
         self.manager.protocol = self.protocol
         self.experience = Experience()
@@ -142,6 +148,9 @@ class EmberServer:
         self._setup_routes()
         self._setup_event_handlers()
         install_player_api(self)
+        frontend = os.getenv('EMBER_FRONTEND_DIR', '')
+        if frontend:
+            self.app.mount('/', StaticFiles(directory=frontend, html=True), name='frontend')
 
     def _restore_epoch(self):
         self.protocol.rotate()
@@ -158,9 +167,12 @@ class EmberServer:
         self.safe_broadcast({'type': 'world.reset'})
 
     def _setup_middleware(self):
+        from service.auth import install_auth
+        runtime = self.service_runtime
+        install_auth(self.app, runtime.store if runtime else None, runtime.auth if runtime else None)
         self.app.add_middleware(
             CORSMiddleware,
-            allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+            allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"] + (list(runtime.auth.origins) if runtime else []),
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
@@ -174,15 +186,40 @@ class EmberServer:
             if not self.archive_manager.recovery_required:
                 await asyncio.to_thread(self.state_manager.prepare_startup)
                 self.heartbeat.start()
+            if getattr(self, 'service_runtime', None):
+                self.service_runtime.start(self)
 
         @self.app.on_event('shutdown')
         async def shutdown_event():
             self.event_bus.paused = True
-            self.experience.checkpoint()
+            if getattr(self, 'service_runtime', None):
+                await asyncio.to_thread(self.service_runtime.stop)
+            turn = self.event_bus.turns.current
+            if turn:
+                turn.request_cancel()
             await asyncio.to_thread(self.heartbeat.stop)
+            def checkpoint():
+                with self.event_bus.operation_lock:
+                    self.experience.checkpoint()
+            await asyncio.to_thread(checkpoint)
             await asyncio.to_thread(self.db_memory.flush)
             self.db_memory.stop()
             await asyncio.to_thread(self.episodic_memory.stop)
+
+        @self.app.get('/health/live')
+        async def live():
+            return {'status': 'alive'}
+
+        @self.app.get('/health/ready')
+        async def ready():
+            if not self.db_memory.ready or not self.episodic_memory.ready or not self.state_manager.ready or self.archive_manager.recovery_required:
+                raise HTTPException(503, 'preparing')
+            if getattr(self, 'service_runtime', None):
+                try:
+                    await asyncio.to_thread(self.service_runtime.store.check_ready)
+                except Exception:
+                    raise HTTPException(503, 'database unavailable') from None
+            return {'status': 'ready'}
 
         # Mount audio directory
         audio_dir = "data/audio"
@@ -190,22 +227,42 @@ class EmberServer:
         self.app.mount("/audio", StaticFiles(directory=audio_dir), name="audio")
 
         def config_snapshot():
+            experience_snapshot = self.experience.snapshot() if hasattr(self, 'experience') else None
+            policy = getattr(self.brain, 'proactive_policy', None)
+            if hasattr(policy, 'status'):
+                offer = self.state_manager.proactive_offer()
+                policy.check(self.memory.get_memory()['history'], offer, **self.state_manager.delivery_gates())
+                proactive_status = dict(policy.status(), last_evolution=getattr(self.state_manager, 'last_proactive_evolution', None))
+            else:
+                proactive_status = {'version': 'legacy', 'error': getattr(policy, 'error', None)}
+            if experience_snapshot:
+                seen = getattr(policy, 'data', {}).get('seen', {})
+                for item in experience_snapshot.get('agreements', []):
+                    due = item.get('reminder_at')
+                    key = f"reminder:{item['id']}:{int(due * 1000)}" if type(due) in (int, float) else ''
+                    item['notification_status'] = ('disabled' if not item.get('notification_enabled') else
+                        seen.get(key, 'expired' if due and self.event_bus.logical_now - due > 900 else 'waiting'))
             return {
                 "character_name": "Ember",
                 "display_name": settings.CHARACTER_NAME,
-                "state": self.state_manager.current_state,
+                "state": self.state_manager.scene_snapshot(),
                 "logical_time": self.event_bus.formatted_logical_now,
                 "is_thinking": self.state_manager.is_thinking or self.brain._is_processing or self.event_bus.pending_dialogues > 0,
                 "time_accel_factor": self.event_bus.time_accel_factor,
                 "timezone": settings.TIMEZONE,
+                "dialogue_policy": {"version": settings.DIALOGUE_POLICY,
+                    "style": settings.DIALOGUE_STYLE, "stock_adaptations": settings.DIALOGUE_ADAPTATIONS},
                 "capabilities": {"message_receipts": True, "correlated_audio": True, "cancel_turn": True,
                     'world_epoch': hasattr(self, 'protocol'), 'player_records': hasattr(self, 'experience'),
-                    'archive_tasks': hasattr(self, 'archive_jobs'), 'shared_projects': True},
+                    'archive_tasks': hasattr(self, 'archive_jobs'), 'shared_projects': True, 'shared_materials': True,
+                    'direct_scene': True, 'web_proactive': True, 'web_reminders': settings.PROACTIVE_POLICY == 'events_v1'},
                 'shared_project': PROJECT_INTRO,
                 **(self.protocol.snapshot() if hasattr(self, 'protocol') else {}),
-                'experience': self.experience.snapshot() if hasattr(self, 'experience') else None,
+                'experience': experience_snapshot,
+                'continuation': continuation_items(experience_snapshot) if experience_snapshot else [],
                 'archive_task': self.archive_jobs.snapshot() if hasattr(self, 'archive_jobs') else None,
                 'world_paused': self.event_bus.world_paused,
+                'service': self.service_runtime.snapshot() if getattr(self, 'service_runtime', None) else None,
                 'presentation': presentation(self.state_manager.current_state, self.event_bus.formatted_logical_now),
                 "turn": self.event_bus.turns.snapshot(),
                 "status": {
@@ -216,6 +273,9 @@ class EmberServer:
                     "scene": {"ready": self.state_manager.ready, "state": self.state_manager.current_state.get('scene_status'), "error": self.state_manager.last_error},
                     "paused": self.event_bus.paused or (self.archive_jobs.busy if hasattr(self, 'archive_jobs') else False),
                     'recovery_required': getattr(getattr(self, 'archive_manager', None), 'recovery_required', False),
+                    'proactive': proactive_status,
+                    'role_continuity': {'enabled': settings.ROLE_CONTINUITY_ENABLED,
+                        'activity': (self.state_manager.current_state.get('role_continuity') or {}).get('activity')},
                     "configuration_warnings": settings.CONFIG_WARNINGS,
                 },
             }
@@ -666,9 +726,13 @@ class EmberServer:
         import uvicorn
 
         logger.info(">>> Ember Server starting...")
-        uvicorn.run(self.app, host="0.0.0.0", port=8000, loop="asyncio")
+        uvicorn.run(self.app, host=os.getenv('EMBER_HOST', '0.0.0.0'), port=int(os.getenv('EMBER_PORT', '8000')), loop="asyncio")
 
 
 if __name__ == "__main__":
-    server = EmberServer()
-    server.start()
+    if os.getenv('EMBER_AUTH_REQUIRED', '').lower() == 'true':
+        from service.run import main
+        main()
+    else:
+        server = EmberServer()
+        server.start()

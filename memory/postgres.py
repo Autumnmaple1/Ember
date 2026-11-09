@@ -9,7 +9,7 @@ def connect():
     return pg_connect(host=settings.PG_HOST, port=settings.PG_PORT,
                       dbname=settings.PG_DB, user=settings.PG_USER,
                       password=settings.PG_PASSWORD, connect_timeout=5,
-                      options="-c timezone=Asia/Shanghai")
+                      options="-c timezone=Asia/Shanghai -c search_path=public")
 
 
 @contextmanager
@@ -35,6 +35,7 @@ def sync_sequence(conn, table):
 
 def initialize_history(conn):
     with conn.cursor() as cur:
+        cur.execute('SET search_path TO public')
         cur.execute("""CREATE TABLE IF NOT EXISTS message_list (
             id SERIAL PRIMARY KEY, timestamp TIMESTAMP DEFAULT NOW(), sender TEXT,
             text TEXT, thinking TEXT, message_id TEXT UNIQUE)""")
@@ -54,7 +55,8 @@ def initialize_history(conn):
 
 def initialize_episodic(conn):
     with conn.cursor() as cur:
-        cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        cur.execute('SET search_path TO public')
+        cur.execute("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public")
     conn.commit()
     register_vector(conn)
     with conn.cursor() as cur:

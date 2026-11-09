@@ -27,6 +27,7 @@ try {
     window.soakAudio = { active: 0, max: 0, starts: 0 };
     window.Audio = class {
       async play() {
+        if (this.src?.startsWith('data:audio/wav;base64,UklGRiY')) return;
         if (!this.playing) { this.playing = true; window.soakAudio.active += 1; }
         window.soakAudio.starts += 1;
         window.soakAudio.max = Math.max(window.soakAudio.max, window.soakAudio.active);

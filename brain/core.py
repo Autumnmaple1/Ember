@@ -12,6 +12,8 @@ import re
 from brain.tag_utils import validate_and_fix_llm_output, extract_thought_and_speech
 from core.turns import TurnCancelled, TERMINAL
 from brain.dialogue_context import build_dialogue_messages
+from core.proactive import delivery_rules, ProactivePolicy
+from core.proactive_events import EventProactivePolicy, ordinary_offer
 from tools.processor import ToolCallProcessor
 
 logger = logging.getLogger(__name__)
@@ -46,6 +48,10 @@ class Brain:
         self.memory = memory
         self.event_bus = event_bus
         self.hippocampus = hippocampus
+        self.proactive_policy = (EventProactivePolicy(settings.PROACTIVE_MIN_INTERVAL,
+            minimum_gap=settings.PROACTIVE_EVENT_GAP, hourly_limit=settings.PROACTIVE_HOURLY_LIMIT)
+            if settings.PROACTIVE_POLICY == 'events_v1' else ProactivePolicy(settings.PROACTIVE_MIN_INTERVAL))
+        event_bus.proactive_policy = self.proactive_policy
 
         # 订阅事件
         self.event_bus.subscribe("user.input", self._on_user_input)
@@ -75,25 +81,72 @@ class Brain:
                 self.event_bus.pending_condition.notify_all()
 
     def _on_idle_speak(self, event: Event):
-        if self.event_bus.quiet or self.event_bus.world_paused or getattr(self.event_bus, 'archive_active', False):
+        if self.event_bus.quiet or self.event_bus.world_paused or getattr(self.event_bus, 'archive_active', False) or getattr(self.state_manager, 'is_sleeping', False) is True:
             return
         def _speak():
             with self.event_bus.operation_lock:
                 with self.event_bus.pending_condition:
                     if self.event_bus.paused or self.event_bus.world_paused or self.event_bus.quiet or getattr(self.event_bus, 'archive_active', False) or self.event_bus.pending_dialogues:
                         return
+                    history = self.memory.get_memory()['history']
+                    offer = None
+                    gates = {}
+                    if isinstance(self.proactive_policy, EventProactivePolicy):
+                        provider = getattr(self.state_manager, 'proactive_offer', None)
+                        offer = provider() if callable(provider) else ordinary_offer(history)
+                        gate_provider = getattr(self.state_manager, 'delivery_gates', None)
+                        gates = gate_provider() if callable(gate_provider) else {}
+                        if event.data and event.data.get('offer_id') and event.data['offer_id'] != offer['id']:
+                            return
+                    try:
+                        accepted = self.proactive_policy.reserve(history, offer, **gates) if offer else self.proactive_policy.reserve(history)
+                        if not accepted:
+                            return
+                    except OSError:
+                        self.proactive_policy.error = '主动发言计时保存失败，已暂停主动发言'
+                        logger.exception('Could not reserve proactive attempt')
+                        return
                     turn = self.event_bus.turns.begin(int(self.event_bus.logical_now * 1000), source='proactive')
                     self._is_processing = True
                 self.event_bus.publish(Event('turn.started', turn.snapshot()))
                 try:
-                    self.memory.update_base_prompt(self.tool_processor.build_system_prompt_with_tools(settings.SYSTEM_PROMPT))
-                    self._llm_speak(self.memory, pack=True, proactive=True, turn=turn)
+                    if offer and offer['kind'] == 'reminder':
+                        self._deliver_notice(offer['summary'], turn)
+                    else:
+                        self._active_proactive_offer = offer
+                        self.memory.update_base_prompt(self.tool_processor.build_system_prompt_with_tools(settings.SYSTEM_PROMPT))
+                        self._llm_speak(self.memory, pack=True, proactive=True, turn=turn)
+                except TurnCancelled:
+                    self._finish_incomplete(turn, 'interrupted')
+                except Exception:
+                    logger.exception('Proactive preparation failed')
+                    self._finish_incomplete(turn, 'interrupted' if turn.cancelled.is_set() else 'failed')
                 finally:
+                    if offer:
+                        try:
+                            delivered = any(row.get('message_id') == turn.message_id for row in self.memory.get_memory()['history'])
+                            self.proactive_policy.finish(offer['id'], 'delivered' if delivered else 'silent' if turn.status == 'completed' else 'interrupted' if turn.status == 'interrupted' else 'failed')
+                        except OSError:
+                            self.proactive_policy.error = '投递结果保存失败，已暂停主动投递'
+                            logger.exception('Proactive receipt persistence failed')
+                    self._active_proactive_offer = None
                     self._is_processing = False
                     self._emit_turn_finished(turn)
 
-        thread = threading.Thread(target=_speak)
+        thread = threading.Thread(target=_speak, daemon=True, name='ember-proactive')
         thread.start()
+
+    def _deliver_notice(self, text, turn):
+        """An explicitly enabled reminder has a deterministic body and normal receipts."""
+        turn.check()
+        turn.set_phase('generating')
+        self.event_bus.publish(Event('llm.started', {'message_id': turn.message_id, 'timestamp': turn.timestamp, 'turn_id': turn.id}))
+        turn.partial = text
+        self.event_bus.publish(Event('llm.chunk', {'text': text, 'turn_id': turn.id}))
+        self.memory.add_message('assistant', text, timestamp=turn.timestamp, message_id=turn.message_id, turn_source='proactive')
+        turn.finish('completed')
+        self.event_bus.publish(Event('llm.finished', {'text': text, 'message_id': turn.message_id,
+            'timestamp': turn.timestamp, 'turn_id': turn.id}))
 
     def process_dialogue(self, user_message, metadata=None, _accepted=False):
         turn = None
@@ -157,7 +210,7 @@ class Brain:
         if speech:
             try:
                 self.memory.add_message('assistant', speech, timestamp=turn.timestamp,
-                    message_id=turn.message_id, completion_status='interrupted')
+                    message_id=turn.message_id, completion_status='interrupted', turn_source=turn.source)
             except Exception:
                 logger.exception('Could not save interrupted short-term message')
         self.event_bus.publish(Event('llm.interrupted', {'text': speech, 'message_id': turn.message_id,
@@ -165,7 +218,8 @@ class Brain:
 
     def _stream_reply(self, messages, turn):
         turn.check()
-        stream = self.llm_client.stream_chat(model_config=settings.LARGE_LLM, messages=messages, cancel_token=turn)
+        stream = self.llm_client.stream_chat(model_config=settings.LARGE_LLM, messages=messages,
+            call_type='proactive' if turn.source == 'proactive' else 'dialogue', cancel_token=turn)
         try:
             for chunk in stream:
                 turn.check()
@@ -217,7 +271,10 @@ class Brain:
         # Dynamic facts belong to the system context, never a fake user transcript.
         messages = build_dialogue_messages(system_prompt, history, self.state_manager.prompt_injection,
             self.event_bus.logical_now, proactive=proactive,
-            proactive_instruction=settings.IDLE_SPEAKING_UPDATE_PROMPT, memories=memories)
+            proactive_instruction=settings.IDLE_SPEAKING_UPDATE_PROMPT + delivery_rules(self.event_bus), memories=memories)
+        offer = getattr(self, '_active_proactive_offer', None) if proactive else None
+        if offer:
+            messages[0]['content'] += '\n【本轮主动事件：程序记录】' + json.dumps(offer, ensure_ascii=False) + '\n围绕该事件自然开口，按内容说完整；不将提醒或计时解释成用户已经完成活动。'
 
         full_content = ""
         chunk_count = 0
@@ -371,7 +428,8 @@ class Brain:
             turn.finish('completed')
 
             try:
-                self.memory.add_message("assistant", full_content, timestamp=timestamp, message_id=message_id)
+                self.memory.add_message("assistant", full_content, timestamp=timestamp, message_id=message_id,
+                    turn_source=turn.source)
             except Exception as e:
                 logger.error(f"保存消息失败: {e}")
 

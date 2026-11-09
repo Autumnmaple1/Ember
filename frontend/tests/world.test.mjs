@@ -5,6 +5,15 @@ import { scenePresentation } from '../src/scenePresentation.js';
 import { AudioController } from '../src/audioController.js';
 import { mergeHistory } from '../src/messageHistory.js';
 
+test('a delayed snapshot cannot regress continuation independently of saved experience', () => {
+  const current = { epoch: 'same', experience: { revision: 8 }, continuation: [{ id: 'current-material' }] };
+  const stale = { epoch: 'same', experience: { revision: 7 }, continuation: [] };
+  const result = mergeConfigSnapshot(current, stale);
+  assert.deepEqual(result.continuation, current.continuation);
+  assert.equal(result.experience.revision, 8);
+  assert.deepEqual(mergeConfigSnapshot(current, { ...stale, epoch: 'restored' }).continuation, []);
+});
+
 test('restore retires old epochs and ignores duplicate replay without dropping unseen out of order events', () => {
   const gate = new WorldEpoch();
   gate.reset('one');

@@ -719,8 +719,11 @@ class ArchiveManager:
             allowed = {m['memory_id'] for j in self.short_term_memory.working.snapshot()['jobs'] for m in j['memories']}
             self.episodic_memory.reconcile_spool(allowed)
         if self.event_bus and hasattr(self.event_bus, 'experience'):
+            quiet = self.event_bus.quiet  # User delivery preference is not fictional world progress.
             self.event_bus.experience.reload()
-            self.event_bus.quiet = self.event_bus.experience.data['quiet']
+            if self.event_bus.experience.data['quiet'] != quiet:
+                self.event_bus.experience.set_quiet(quiet)
+            self.event_bus.quiet = quiet
         # 1. 先重载短期记忆（从 chat_memory.json）
         if self.short_term_memory and hasattr(self.short_term_memory, "_load_memory"):
             self.short_term_memory._load_memory()
@@ -1082,6 +1085,7 @@ class ArchiveManager:
                 database=settings.PG_DB,
                 user=settings.PG_USER,
                 password=settings.PG_PASSWORD,
+                options='-c timezone=Asia/Shanghai -c search_path=public',
             )
 
             cursor = conn.cursor()
@@ -1149,6 +1153,7 @@ class ArchiveManager:
                 database=settings.PG_DB,
                 user=settings.PG_USER,
                 password=settings.PG_PASSWORD,
+                options='-c timezone=Asia/Shanghai -c search_path=public',
             )
 
             cursor = conn.cursor()

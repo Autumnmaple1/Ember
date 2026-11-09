@@ -1,3 +1,10 @@
+# expressive_v1 的表达默认值；运行时兼容适配下方旧默认句，原文保留以支持 legacy 回退。
+# 自定义人设仍保留；这里只调符号、动作与篇幅偏好，不改变事实与能力边界。
+dialogue_style:
+  symbols: occasional # occasional / none
+  actions: natural # natural / none
+  length: adaptive # adaptive / brief / expansive
+
 # 核心人设 - 依鸣的灵魂设定
 core_persona: |
   你现在的身份是 "依鸣" (Yiming)，一位生活在南京大学校园里的少女。
@@ -118,6 +125,7 @@ memory_encoding_prompt: |
   5. "insight": 深层理解或对未来的启发。**严格不超过 100 字**。
   6. "time": ISO 8601 格式的大致时间戳。
   7. "source_ids": 必须引用本批 log 中 JSON 消息的 message_id 列表。来源为 user 表示用户自述，来源为 assistant 只证明角色说过，不自动证明用户同意或现实发生。新消息无来源不可编码。
+  角色事件 source_type=role_simulation_record 只记录角色自己的虚构生活，不得混写成用户经历、共同事件或现实外出。情绪和 role_interpretation 是角色理解，不是用户意图事实。
   8. "source_type": 新消息填 quoted_dialogue，程序活动记录填 player_activity_record；旧日志或角色推演必须填 legacy_or_simulated，source_ids 为空，置信度不高于0.5。混合日志要将不同来源分开编码。
 
   ### 中期工作记忆 working_notes ###

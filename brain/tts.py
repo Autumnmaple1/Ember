@@ -5,6 +5,7 @@ import logging
 import os
 import aiohttp
 from brain.tag_utils import remove_thought_content
+from core.service_policy import reserve, finish
 
 logger = logging.getLogger("EmberTTS")
 
@@ -29,7 +30,12 @@ class TTSManager:
         if not clean_text or not clean_text.strip():
             raise TTSGenerationError('empty_text', '这条消息没有可朗读的对白')
 
+        ticket = None
         try:
+            try:
+                ticket = reserve('tts', self.voice, 'speech')
+            except RuntimeError as exc:
+                raise TTSGenerationError('quota_exceeded', str(exc)) from exc
             audio_data = await asyncio.wait_for(
                 self._do_tts(clean_text),
                 timeout=timeout
@@ -37,6 +43,8 @@ class TTSManager:
 
             if not audio_data:
                 raise TTSGenerationError('no_audio', '语音服务未返回音频，请重试')
+            finish(ticket)
+            ticket = None
             return base64.b64encode(audio_data).decode('utf-8')
         except TTSGenerationError:
             raise
@@ -57,6 +65,8 @@ class TTSManager:
         except Exception as e:
             logger.error('TTS 合成失败 (%s)', type(e).__name__)
             raise TTSGenerationError('generation_failed', '语音生成失败，请稍后重试') from e
+        finally:
+            finish(ticket, status='failed')
 
     async def _do_tts(self, clean_text: str):
         """执行实际的 TTS 合成"""

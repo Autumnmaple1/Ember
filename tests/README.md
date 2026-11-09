@@ -1,6 +1,18 @@
 # Ember 验证说明
 
-当前 Python 回归为 241 项，新增25项[三层记忆衔接验证](../docs/memory-pipeline-repair.md)。前端最近一次验证为 26 项单元测试及三组浏览器交互场景。角色上下文见[在场感修正](../docs/presence-first-pass.md)，新增活动见[共同手册原型](../docs/shared-project-prototype.md)，推理隔离修复见 [语音修复记录](../docs/tts-recovery.md)。
+最新（2026-11-08）：对话重整完整后端回归 **362 项**、末次时钟与睡眠边界定向 **66 项**、前端单元 **32 项**通过；五组浏览器、lint 与构建通过。新增 `test_role_continuity.py` 覆盖情绪事件、活动、记忆编码与真实测试向量库召回、投递预算、提醒、读档与时间回退。见[完整交付](../docs/dialogue-policy-completion.md)及[模型评阅](../docs/dialogue-policy-evaluation.md)。
+
+此前表达层第一阶段后端 **334 项**、前端 **32 项**通过，详见[阶段记录](../docs/dialogue-expression-phase1.md)。
+
+此前面对面保存与异常回复修复后，后端完整回归 **316 项**、前端单元 **32 项**通过，五组浏览器回归、lint 与构建通过。新增 `test_reply_repair.py` 覆盖主动间隔持久化、未回应抑制及回复上下文；`scene.browser.mjs` 检查共同位置、忙碌反馈及失败重试，见[修复与验证说明](../docs/scene-save-and-reply-repair.md)。
+
+此前场景直接保存与网页主动陪伴解耦后，后端完整回归 **306 项**、前端单元 **32 项**通过，见[使用说明](../docs/scene-and-proactive-settings.md)。
+
+2026-11-07 心跳与主动发言检查：完整后端 **287 项通过**，新增 17 项主动路径验证，前端主动轮次与自动音频检查通过，详见[心跳检查说明](../docs/heartbeat-proactive-check.md)。
+
+2026-11-07 自动播放修复：前端 32 项单元、四组浏览器检查、lint 与构建通过，详见[语音修复记录](../docs/tts-recovery.md)。新增 `audio.browser.mjs` 使用有效合成 WAV 与原生媒体元素，不请求语音供应商。
+
+2026-11-04 完整 Python 回归为 270 项，前端 27 项单元测试、lint 与构建通过。新增[共同材料与衔接](../docs/continuity-second-pass.md)和[常驻容器验证](../docs/service-deployment.md)，包括真实容器的登录、设备撤销、进程恢复与备份。角色上下文见[在场感修正](../docs/presence-first-pass.md)，活动见[共同手册原型](../docs/shared-project-prototype.md)，推理隔离修复见[语音修复记录](../docs/tts-recovery.md)。
 
 ## 数据隔离
 

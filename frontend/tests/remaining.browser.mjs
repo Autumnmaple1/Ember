@@ -38,7 +38,7 @@ try {
       window.audioStarts = 0; window.audioPaused = 0;
       localStorage.setItem('autoPlay', 'true');
       window.Audio = class {
-        async play() { window.audioStarts += 1; }
+        async play() { if (!this.src?.startsWith('data:audio/wav;base64,UklGRiY')) window.audioStarts += 1; }
         pause() { window.audioPaused += 1; }
         removeAttribute() {} load() {}
       };

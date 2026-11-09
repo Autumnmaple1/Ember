@@ -24,7 +24,7 @@ try {
     localStorage.setItem('autoPlay', 'true');
     window.audioStarts = 0;
     window.Audio = class {
-      async play() { window.audioStarts += 1; }
+      async play() { if (!this.src?.startsWith('data:audio/wav;base64,UklGRiY')) window.audioStarts += 1; }
       pause() {}
       removeAttribute() {}
       load() {}
@@ -145,11 +145,22 @@ try {
   await page.getByText('收尾确认后才能发送的下一条', { exact: true }).waitFor();
   assert.equal(sent.length, 6);
   finish('completed');
+  const userMessagesBeforeProactive = await page.locator('.message-user').count();
+  await page.getByRole('button', { name: '自动声音：开', exact: true }).waitFor();
+  current = { turn_id: 'synthetic-proactive-turn', message_id: 'synthetic-proactive-reply',
+    timestamp: now + 100000, source: 'proactive', status: 'running', phase: 'generating', released: false };
+  emit({ type: 'turn.started', ...current });
+  emit({ type: 'message', sender: 'ai', mode: 'start', content: '', ...current });
+  emit({ type: 'message', sender: 'ai', mode: 'append', content: '<response>合成主动话题</response>', ...current });
+  const proactive = finish('completed');
+  emit({ type: 'audio', message_id: proactive.message_id, turn_id: proactive.turn_id, audio_base64: 'synthetic' });
+  await page.waitForFunction(() => window.audioStarts === 1);
+  assert.equal(await page.locator('.message-user').count(), userMessagesBeforeProactive);
   assert.deepEqual(errors, []);
   await mkdir(resolve(project, 'test-results'), { recursive: true });
   await page.screenshot({ path: resolve(project, 'test-results', 'turn-interrupted.png'), fullPage: true });
   console.log(JSON.stringify({ result: 'passed', scenarios: ['wait for terminal before next send', 'edit draft while stopping',
-    'reject stale text/audio', 'cancel queued send', 'reload interrupted records', 'disconnect cancels automatic follow-up', 'completion waits for worker release'] }));
+    'reject stale text/audio', 'cancel queued send', 'reload interrupted records', 'disconnect cancels automatic follow-up', 'completion waits for worker release', 'proactive turn and audio without fake user input'] }));
 } finally {
   await browser?.close();
   await vite.close();

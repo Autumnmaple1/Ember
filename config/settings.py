@@ -6,10 +6,12 @@ import time
 import logging
 import json
 import math
+from config.dialogue_policy import adapt_idle_prompt, adapt_stock_text, compile_persona, validate_policy
 
 logger = logging.getLogger(__name__)
 
-dotenv.load_dotenv()
+if os.getenv('EMBER_NO_DOTENV') != '1':
+    dotenv.load_dotenv()
 
 
 @dataclass
@@ -67,8 +69,12 @@ class Settings:
     logger.info(f"Loaded state: {STATE}")
 
     CHARACTER_NAME = os.getenv("CHARACTER_NAME", "依鸣")
-    CORE_PERSONA = PROMPTS.get("core_persona", "")
-    SYSTEM_PROMPT = CORE_PERSONA + PROMPTS.get("system_prompt", "")
+    RAW_CORE_PERSONA = PROMPTS.get("core_persona", "")
+    DIALOGUE_POLICY = os.getenv('DIALOGUE_POLICY', 'expressive_v1')
+    DIALOGUE_STYLE = validate_policy(DIALOGUE_POLICY, PROMPTS.get('dialogue_style'))
+    SYSTEM_PROMPT, DIALOGUE_ADAPTATIONS = compile_persona(
+        RAW_CORE_PERSONA, PROMPTS.get('system_prompt', ''), DIALOGUE_POLICY, DIALOGUE_STYLE)
+    CORE_PERSONA = adapt_stock_text(RAW_CORE_PERSONA)[0] if DIALOGUE_POLICY == 'expressive_v1' else RAW_CORE_PERSONA
     STATE_UPDATE_PROMPT = PROMPTS.get("state_update_prompt", "")
     GRAPH_CONSOLIDATION_PROMPT = PROMPTS.get("graph_consolidation_prompt", "")
     TOOL_USAGE_GUIDELINES = PROMPTS.get("tool_usage_guidelines", "")
@@ -82,9 +88,25 @@ class Settings:
     # 空闲超时使用真实秒数，动态加速不改变等待间隔。
     STATE_IDLE_MIN_TIMEOUT = float(os.getenv("STATE_IDLE_MIN_TIMEOUT", "30"))
     STATE_IDLE_MAX_TIMEOUT = float(os.getenv("STATE_IDLE_MAX_TIMEOUT", "3600"))
+    PROACTIVE_MIN_INTERVAL = float(os.getenv('PROACTIVE_MIN_INTERVAL', '600'))
+    if not math.isfinite(PROACTIVE_MIN_INTERVAL) or PROACTIVE_MIN_INTERVAL < 0:
+        raise ValueError('PROACTIVE_MIN_INTERVAL 必须是有限的非负现实秒数')
+    PROACTIVE_POLICY = os.getenv('PROACTIVE_POLICY', 'events_v1')
+    if PROACTIVE_POLICY not in ('legacy', 'events_v1'):
+        raise ValueError('PROACTIVE_POLICY 必须是 legacy 或 events_v1')
+    ROLE_CONTINUITY_ENABLED = os.getenv('ROLE_CONTINUITY_ENABLED', 'true').lower() == 'true'
+    ROLE_EMOTION_HALF_LIFE = float(os.getenv('ROLE_EMOTION_HALF_LIFE', '3600'))
+    ROLE_ACTIVITY_SECONDS = float(os.getenv('ROLE_ACTIVITY_SECONDS', '900'))
+    PROACTIVE_EVENT_GAP = float(os.getenv('PROACTIVE_EVENT_GAP', '120'))
+    PROACTIVE_HOURLY_LIMIT = int(os.getenv('PROACTIVE_HOURLY_LIMIT', '3'))
+    for value in (ROLE_EMOTION_HALF_LIFE, ROLE_ACTIVITY_SECONDS, PROACTIVE_EVENT_GAP):
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError('角色与主动节奏时长必须为有限正数')
+    if PROACTIVE_HOURLY_LIMIT < 1:
+        raise ValueError('PROACTIVE_HOURLY_LIMIT 必须大于零')
 
-    IDLE_STATE_UPDATE_PROMPT = PROMPTS.get("idle_state_update_prompt", "")
-    IDLE_SPEAKING_UPDATE_PROMPT = PROMPTS.get("idle_speaking_update_prompt", "")
+    IDLE_STATE_UPDATE_PROMPT = adapt_idle_prompt(PROMPTS.get("idle_state_update_prompt", ""), DIALOGUE_POLICY)
+    IDLE_SPEAKING_UPDATE_PROMPT = adapt_idle_prompt(PROMPTS.get("idle_speaking_update_prompt", ""), DIALOGUE_POLICY)
     STATE_UPDATE_INTERVAL = int(
         os.getenv("STATE_UPDATE_INTERVAL", "1")
     )  # 每几轮对话更新一次状态

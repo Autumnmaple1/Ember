@@ -79,17 +79,19 @@ class ShortTermMemory:
 
         self._executor.submit(_log)
 
-    def add_message(self, role, content, timestamp=None, message_id=None, completion_status='completed'):
+    def add_message(self, role, content, timestamp=None, message_id=None, completion_status='completed', turn_source=None):
         with self._lock:
-            self._add_message(role, content, timestamp, message_id, completion_status)
+            self._add_message(role, content, timestamp, message_id, completion_status, turn_source)
 
-    def _add_message(self, role, content, timestamp=None, message_id=None, completion_status='completed'):
+    def _add_message(self, role, content, timestamp=None, message_id=None, completion_status='completed', turn_source=None):
         if role == "assistant":
             _, content = extract_thought_and_speech(content)
             if not content.strip():
                 return
         row = {'role': role, 'content': content, 'timestamp': timestamp,
             'message_id': message_id or str(uuid.uuid4()), 'completion_status': completion_status}
+        if turn_source in ('dialogue', 'proactive'):
+            row['turn_source'] = turn_source
         self.async_log('./config/chat_history.log', json.dumps({**row,
             'source_type': 'user_statement' if role == 'user' else 'assistant_statement'}, ensure_ascii=False))
         self.memory.append(row)

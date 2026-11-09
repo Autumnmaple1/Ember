@@ -28,7 +28,10 @@ export function mergeConfigSnapshot(previous, incoming) {
     result.state = previous.state;
     result.state_version = previous.state_version;
   }
-  if ((previous.experience?.revision || 0) > (incoming.experience?.revision || 0)) result.experience = previous.experience;
+  if ((previous.experience?.revision || 0) > (incoming.experience?.revision || 0)) {
+    result.experience = previous.experience;
+    result.continuation = previous.continuation;
+  }
   if ((previous.archive_task?.revision || 0) > (incoming.archive_task?.revision || 0)) result.archive_task = previous.archive_task;
   if (previous.archive_task?.task_id === incoming.archive_task?.task_id && previous.archive_task?.status !== 'running' && incoming.archive_task?.status === 'running') result.archive_task = previous.archive_task;
   return result;

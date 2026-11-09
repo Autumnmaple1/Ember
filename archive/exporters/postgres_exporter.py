@@ -89,6 +89,7 @@ class PostgresExporter(BaseExporter):
                     user=self.user,
                     password=self.password,
                     connect_timeout=10,
+                    options='-c timezone=Asia/Shanghai -c search_path=public',
                 )
                 self.logger.debug(f"数据库连接成功 (尝试 {attempt + 1}/{retries})")
                 return conn
@@ -186,7 +187,7 @@ class PostgresExporter(BaseExporter):
                 "-d",
                 self.database,
                 "-t",
-                table_name,
+                'public.' + table_name,
                 "--data-only",
                 "--column-inserts",
                 "-f",

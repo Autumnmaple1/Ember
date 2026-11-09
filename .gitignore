@@ -56,6 +56,7 @@ data/failed_memories/
 data/cache/
 data/db/
 data/state/
+data/service-runtime/
 data/vector_store/
 data/audio/
 data/files/
@@ -124,3 +125,7 @@ config/chat_memory.tmp
 .idea/
 .DS_Store
 Thumbs.db
+output/
+demo/runtime/
+demo/site/
+deploy/private/

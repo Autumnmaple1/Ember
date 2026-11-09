@@ -46,7 +46,7 @@ export default function FocusPanel({ session }) {
       {shared && <label>确认对话来源<select value={source} required onChange={event => setSource(event.target.value)}><option value="">选择已保存的角色回复</option>{sources.map(item => <option key={item.message_id} value={item.message_id}>{item.content.slice(0, 70)}</option>)}</select></label>}
       <button className="primary-button" disabled={working || session.syncingWorld || session.config?.status?.paused}>{working ? '正在开始…' : '开始自习计时'}</button>
     </form>}
-    {experience && <label className="setting-row"><span>勿扰 · 减少主动发言</span><input type="checkbox" checked={experience.quiet} disabled={working} onChange={event => act({ action: 'quiet', enabled: event.target.checked })} /></label>}
+    {experience && <label className="setting-row"><span>勿扰 · 暂停主动发言</span><input type="checkbox" checked={experience.quiet} disabled={working} onChange={event => act({ action: 'quiet', enabled: event.target.checked })} /></label>}
     <p className="muted">勿扰只关闭角色主动说话；你的输入仍会正常回复，世界继续演化。</p>
     {experience?.activities.filter(item => ['completed', 'interrupted'].includes(item.status)).slice(-3).reverse().map(item => <article className="record-card" key={item.id}><strong>{item.status === 'completed' ? '自习已完成' : '自习提前结束'}</strong><p>{clock(item.elapsed_seconds)} · {item.shared ? '由你确认的共同活动' : '个人计时'}</p><p>{item.summary || '没有填写回顾'}</p></article>)}
   </section>;

@@ -126,6 +126,44 @@ test('audio failures remain recoverable without blocking conversation text', asy
   assert.equal(controller.current, null);
 });
 
+test('blocked automatic audio retries the cached clip and stopping removes permission recovery', async () => {
+  const states = [];
+  let calls = 0, created = 0;
+  const audio = { play: async () => {
+    if (++calls === 1) throw new DOMException('gesture required', 'NotAllowedError');
+  }, pause() {}, removeAttribute() {}, load() {} };
+  const controller = new AudioController(state => states.push(state), () => { created++; return audio; });
+  controller.setEnabled(true);
+  controller.receive({ message_id: 'cached', audio_base64: 'already-generated' });
+  await Promise.resolve();
+  assert.equal(states.at(-1).canResume, true);
+  controller.retryBlocked();
+  await Promise.resolve();
+  assert.equal(states.at(-1).state, 'playing');
+  assert.equal(created, 1, 'No regeneration or new media element is needed');
+  controller.stop();
+  controller.retryBlocked();
+  assert.equal(calls, 2);
+  assert.equal(states.at(-1).canResume, false);
+});
+
+test('a delayed play result cannot pause the next clip on a reused media element', async () => {
+  let finishOld;
+  let calls = 0, paused = 0;
+  const audio = { play: () => ++calls === 1 ? new Promise(resolve => { finishOld = resolve; }) : Promise.resolve(),
+    pause() { paused++; }, removeAttribute() {}, load() {} };
+  const controller = new AudioController(() => {}, () => audio);
+  controller.setEnabled(true);
+  controller.receive({ message_id: 'first', audio_base64: 'first' });
+  controller.stop();
+  controller.receive({ message_id: 'second', audio_base64: 'second' });
+  await Promise.resolve();
+  const before = paused;
+  finishOld(); await Promise.resolve();
+  assert.equal(paused, before);
+  assert.equal(controller.current, audio);
+});
+
 test('automatic speech errors are visible while muted or cancelled failures stay suppressed', () => {
   const { controller, states } = player();
   controller.setEnabled(true);

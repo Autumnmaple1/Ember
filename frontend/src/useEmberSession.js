@@ -156,6 +156,7 @@ export default function useEmberSession(autoPlay) {
   }, []);
 
   useEffect(() => { audio.setEnabled(autoPlay); }, [autoPlay, audio]);
+  useEffect(() => () => audio.dispose(), [audio]);
   useEffect(() => {
     const owner = new PlaybackOwner(`ember-audio:${API_BASE}`, () => audio.stop());
     audio.acquire = manual => owner.claim(manual);
@@ -276,8 +277,10 @@ export default function useEmberSession(autoPlay) {
       }
       if (!epochGate.current.accepts(data)) return;
       if (data.type === 'experience.update') {
-        setConfig(previous => previous && (data.experience.revision || 0) >= (previous.experience?.revision || 0) ? { ...previous, experience: data.experience } : previous);
-        if (configRef.current && (data.experience.revision || 0) >= (configRef.current.experience?.revision || 0)) configRef.current.experience = data.experience;
+        setConfig(previous => previous && (data.experience.revision || 0) >= (previous.experience?.revision || 0) ? { ...previous, experience: data.experience, continuation: data.continuation ?? previous.continuation } : previous);
+        if (configRef.current && (data.experience.revision || 0) >= (configRef.current.experience?.revision || 0)) {
+          configRef.current = { ...configRef.current, experience: data.experience, continuation: data.continuation ?? configRef.current.continuation };
+        }
         return;
       }
       if (data.type === 'archive.task') {
@@ -434,6 +437,7 @@ export default function useEmberSession(autoPlay) {
     requestAnimationFrame(() => markTiming(id, 'local_feedback'));
     lastSendAt.current = performance.now();
     audio.stop();
+    if (audio.enabled) audio.prepare();
     busyRef.current = true;
     setBusy(true);
     setPhase('sending');
@@ -512,8 +516,10 @@ export default function useEmberSession(autoPlay) {
     const result = await getJSON(`${API_BASE}/experience`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...action, epoch }) });
     if (epoch !== epochGate.current.epoch) throw new Error('世界已变化，请重试');
-    configRef.current = mergeConfigSnapshot(configRef.current, { ...configRef.current, experience: result.experience, world_paused: result.world_paused });
-    setConfig(previous => mergeConfigSnapshot(previous, { ...previous, experience: result.experience, world_paused: result.world_paused }));
+    configRef.current = mergeConfigSnapshot(configRef.current, { ...configRef.current, experience: result.experience,
+      continuation: result.continuation ?? configRef.current.continuation, world_paused: result.world_paused });
+    setConfig(previous => mergeConfigSnapshot(previous, { ...previous, experience: result.experience,
+      continuation: result.continuation ?? previous.continuation, world_paused: result.world_paused }));
     return result;
   };
   const locateMessage = async id => {
@@ -525,11 +531,26 @@ export default function useEmberSession(autoPlay) {
     setFocusMessage({ id, nonce: performance.now() });
   };
 
+  const saveScene = async (scene, expectedScene) => {
+    const epoch = epochGate.current.epoch;
+    const result = await getJSON(`${API_BASE}/scene`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scene, expected_scene: expectedScene, epoch }) });
+    if (epoch !== epochGate.current.epoch || result.epoch !== epoch) throw new Error('世界已变化，请重新打开当前情境');
+    sceneVersion.current += 1;
+    const merge = previous => mergeConfigSnapshot(previous, { ...previous, ...result,
+      status: { ...previous?.status, scene: { ready: true, state: 'ready', error: null } } });
+    configRef.current = merge(configRef.current);
+    setConfig(merge);
+    return result;
+  };
+
   const setVolume = useCallback(value => audio.setVolume(value), [audio]);
   return { messages, config, connection, configError, historyError, loadingHistory, hasMore, busy, phase,
     metrics, clearMetrics: () => { timings.current.clear(); setMetrics([]); },
-    worldEpoch, syncingWorld, playerAction, locateMessage, focusMessage, refreshWorld: () => synchronizeRef.current?.(),
+    worldEpoch, syncingWorld, playerAction, saveScene, locateMessage, focusMessage, refreshWorld: () => synchronizeRef.current?.(),
     setVolume, toggleAudioPause: () => audio.togglePause(),
     notice, setNotice, thought, emotion, playback, loadHistory,
+    prepareAudio: () => audio.prepare(), resumeAudio: () => audio.retryBlocked(),
     retryHistory: () => loadHistory(failedCursor.current), sendMessage, replay, activeTurn, cancelTurn, stopAudio: () => audio.stop() };
 }

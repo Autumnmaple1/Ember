@@ -1,0 +1,4 @@
+# Run a TLS reverse proxy on the always-on host, then set EMBER_PUBLIC_URL.
+your-domain.example {
+    reverse_proxy 127.0.0.1:8080
+}

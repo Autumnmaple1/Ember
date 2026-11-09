@@ -1,0 +1,9 @@
+.connection-screen { min-height: 100dvh; display: grid; place-items: center; padding: 24px; box-sizing: border-box; background: #f1f2eb; color: #293b32; }
+.connection-card { width: min(100%, 420px); box-sizing: border-box; background: #fffef9; border: 1px solid #d8dfd4; border-radius: 20px; padding: 30px; }
+.connection-brand { font-family: Georgia, serif; font-size: 24px; }
+.connection-card h1 { font-size: 25px; margin: 20px 0 12px; }
+.connection-card p { line-height: 1.7; }
+.connection-card label { display: grid; gap: 8px; margin: 18px 0; }
+.connection-card input { min-width: 0; width: 100%; box-sizing: border-box; padding: 12px; border: 1px solid #abbca8; border-radius: 8px; font-size: 16px; }
+.connection-card button { min-height: 44px; padding: 10px 18px; background: #315441; color: white; border: 0; border-radius: 8px; cursor: pointer; }
+.connection-card button:disabled { opacity: .6; }

@@ -157,8 +157,11 @@ class Hippocampus:
             if not isinstance(mem.get('insight', ''), str) or not isinstance(mem.get('keywords', []), list):
                 raise ValueError('记忆字段无效')
             source_type = 'player_activity_record' if evidence and all(x.get('role') == 'system_event' for x in evidence) else 'quoted_dialogue' if evidence else 'legacy_or_simulated'
+            if any(row.get('source_type') == 'role_simulation_record' for row in evidence):
+                source_type = 'role_simulation_record'
+                mem['content'] = '角色虚构世界记录（不代表用户经历）：' + mem['content']
             mem.update(source_ids=keys, source_type=source_type,
-                evidence=[{k: row.get(k) for k in ('message_id', 'role', 'timestamp', 'content', 'completion_status')} for row in evidence])
+                evidence=[{k: row.get(k) for k in ('message_id', 'role', 'timestamp', 'content', 'completion_status', 'source_type')} for row in evidence])
             mem['memory_id'] = str(uuid.uuid5(uuid.NAMESPACE_URL, text + json.dumps(mem, ensure_ascii=False, sort_keys=True)))
             result.append(mem)
         return result

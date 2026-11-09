@@ -28,7 +28,7 @@ try {
   await page.addInitScript(() => {
     window.audioStarts = 0;
     window.Audio = class {
-      async play() { window.audioStarts += 1; }
+      async play() { if (!this.src?.startsWith('data:audio/wav;base64,UklGRiY')) window.audioStarts += 1; }
       pause() {}
       removeAttribute() {}
       load() {}

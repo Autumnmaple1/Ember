@@ -842,3 +842,7 @@
     min-height: 44px
   }
 }
+.demo-mode-notice { padding: 9px 20px; background: #fff0c9; color: #483411; font-size: 14px; line-height: 1.6; text-align: center; flex-shrink: 0; }
+.continuation-panel label { display: grid; gap: 7px; margin: 14px 0; }
+.continuation-panel input, .continuation-panel textarea { width: 100%; box-sizing: border-box; }
+.shared-material-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; margin: 16px 0; padding: 12px; border-left: 2px solid #a6b6a5; }

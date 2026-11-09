@@ -5,6 +5,7 @@ import logging
 import random
 import threading
 import time
+import math
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from brain.llm_client import LLMClient
@@ -14,8 +15,14 @@ from core.time_utils import to_epoch, time_period
 from memory.memory_process import Hippocampus
 from memory.short_term import ShortTermMemory
 from tools.processor import ToolCallProcessor
-from persona.scene import normalize_scene, validate_scene, has_time_conflict
+from persona.scene import normalize_scene, validate_scene, has_time_conflict, expire_user_presence
 from memory.journal import append_log
+from core.proactive import web_companion, delivery_rules
+from persona.reply_view import VIEW_RULES, make_reply_view, current_reply_view
+from persona import continuity
+from core.companionship import offers as companionship_offers
+from core.proactive_events import EventProactivePolicy
+from memory.journal import append_event_once
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +41,7 @@ remote 必须有已确认的远程联系方式。不得从角色位置猜用户�
 近期目标中的约定必须有明确且带时间的证据；旧历史或旧目标不能证明今天仍有约定。
 这是回复前更新，不是回复后的总结。不得预先编造角色本轮已经说过的话、同意或完成的事情。
 用户没有描述场景变化时，保持现有位置和交流方式；不要每轮重建初见或用“确认位置/关系”替换原有目标。
+last_known_presence 只是长间隔前的最后所知，不是当前事实，不能在用户未重新说明时回填当前位置或面对面状态。
 保留未完成的具体角色意图，只有事件、时间或用户输入确实改变它时才调整。未知空间不等于关系陌生。
 """
 
@@ -50,15 +58,18 @@ class StateManager:
         self.tool_processor = tool_processor or ToolCallProcessor.create_with_memory_tool(hippocampus)
         self.current_state = copy.deepcopy(settings.STATE)
         self.current_state['scene'] = normalize_scene(self.current_state)
+        if settings.ROLE_CONTINUITY_ENABLED:
+            continuity.load_continuity(self.current_state)
         self._thinking_lock = threading.Lock()
         self._thinking = False
-        self.is_sleeping = False
+        self.is_sleeping = (self.current_state.get('role_continuity') or {}).get('sleeping') is True
         self.dialogue_count = 0
         self.ready = False
         self.last_error = None
         self.state_update_timeout = settings.STATE_IDLE_MIN_TIMEOUT
         self.last_interaction_logical_time = event_bus.logical_now
         self.last_interaction_real_time = time.monotonic()
+        self.last_dialogue_logical_time = self._last_user_time()
         event_bus.subscribe("system.tick", self._on_tick)
 
     @property
@@ -87,9 +98,22 @@ class StateManager:
     def _get_idle_info(self, now):
         return {"idle_duration": self._format_duration(now - self.last_interaction_logical_time),
                 "current_time": self._format_logical_time(now),
-                "old_state": json.dumps(self.current_state, ensure_ascii=False)}
+                "old_state": json.dumps(self._model_state(), ensure_ascii=False)}
+
+    def _model_state(self):
+        state = copy.deepcopy(self.current_state)
+        if state.get('role_continuity'):
+            data = state['role_continuity']
+            state['role_continuity'] = {key: data.get(key) for key in ('version', 'activity', 'emotion', 'beliefs', 'sleeping')}
+            state['role_continuity']['events'] = [{key: value for key, value in row.items() if key != 'memory_pending'}
+                for row in data.get('events', [])[-8:]]
+        return state
 
     def _ask_llm_with_tools(self, system_prompt, user_prompt, call_type="state_update", max_iterations=1):
+        if settings.DIALOGUE_POLICY == 'expressive_v1':
+            user_prompt += VIEW_RULES
+        if settings.ROLE_CONTINUITY_ENABLED:
+            user_prompt += continuity.RULES
         messages = [
             {"role": "system", "content": self.tool_processor.build_system_prompt_with_tools(system_prompt + SCENE_RULES)},
             {"role": "user", "content": user_prompt},
@@ -120,10 +144,38 @@ class StateManager:
         temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(file)
         self.current_state = data
-        self._async_log('./config/chat_history.log', json.dumps({'source_type': 'role_state',
-            'state_source': data.get('state_source', 'legacy'), 'timestamp': data['对应时间'],
-            'content': self.state_zip}, ensure_ascii=False))
+        self._drain_role_memory()
+        try:
+            self._async_log('./config/chat_history.log', json.dumps({'source_type': 'role_state',
+                'state_source': data.get('state_source', 'legacy'), 'timestamp': data['对应时间'],
+                'content': self.state_zip}, ensure_ascii=False))
+        except OSError:
+            logger.exception('State committed; auxiliary memory log could not be appended')
         self.event_bus.publish(Event("state.update", {"new_state": copy.deepcopy(data)}))
+
+    def _drain_role_memory(self):
+        data = self.current_state.get('role_continuity')
+        if not settings.ROLE_CONTINUITY_ENABLED or not data or not hasattr(self.short_term_memory, 'working'):
+            return
+        changed = False
+        try:
+            for item in data['events']:
+                if not item.get('memory_pending'):
+                    continue
+                content = json.dumps({key: value for key, value in item.items() if key != 'memory_pending'}, ensure_ascii=False)
+                row = {'message_id': item['id'], 'role': 'system_event', 'timestamp': int(item['at'] * 1000),
+                    'source_type': 'role_simulation_record', 'completion_status': 'completed', 'content': content}
+                append_event_once(row)
+                self.short_term_memory.working.capture([row])
+                item['memory_pending'] = False
+                changed = True
+            if changed:
+                path = Path('config/state.json')
+                temporary = path.with_suffix('.tmp')
+                temporary.write_text(json.dumps(self.current_state, ensure_ascii=False, indent=2), encoding='utf-8')
+                temporary.replace(path)
+        except OSError:
+            logger.exception('角色事件记忆导出未完成，保留待办，下次继续')
 
     def _fallback(self, now, reason, offline=False):
         state = copy.deepcopy(self.current_state)
@@ -151,6 +203,8 @@ class StateManager:
                 candidate = self.llm_client._extract_json(response)
                 if not isinstance(candidate, dict):
                     raise ValueError("模型未返回状态对象")
+                candidate.pop('scene_confirmation', None)  # UI provenance cannot be invented by a model.
+                candidate.pop('role_continuity', None)
                 if 'scene' not in candidate and any(key in candidate for key in ('character_location', 'user_location', 'communication_mode', 'remote_contact_confirmed')):
                     candidate['scene'] = normalize_scene(candidate)
                     for key in ('character_location', 'user_location', 'communication_mode', 'remote_contact_confirmed'):
@@ -181,8 +235,36 @@ class StateManager:
                     state['scene']['communication_mode'] = 'unknown'
                 state['state_source'] = 'inferred' if allow_inferred else 'interaction'
                 state['scene_status'] = 'ready'
+                # Never carry an old view forward and stamp it as newly generated.
+                state.pop('reply_perspective', None)
+                if settings.DIALOGUE_POLICY == 'expressive_v1':
+                    view = make_reply_view(candidate, now, 'startup' if offline else 'idle' if allow_inferred else 'dialogue')
+                    if view:
+                        state['reply_perspective'] = view
                 pulse = state.pop('action_pulse', {})
+                if not isinstance(pulse, dict) or any(
+                        key in pulse and type(pulse[key]) is not bool
+                        for key in ('should_speak', 'memory_encode', 'is_sleeping')):
+                    raise ValueError('action_pulse 必须为对象，开关必须使用 JSON true/false')
+                if settings.ROLE_CONTINUITY_ENABLED:
+                    history = self.short_term_memory.get_memory()['history']
+                    latest = next((row for row in reversed(history) if row.get('role') == 'user'), {})
+                    input_id = latest.get('message_id', '') if user_text else ''
+                    if user_text and not input_id:
+                        import hashlib
+                        input_id = 'unidentified:' + hashlib.sha256(user_text.encode()).hexdigest()
+                    state = continuity.commit(self.current_state, state, now, input_id=input_id,
+                        offline=offline, sleeping=pulse.get('is_sleeping', self.is_sleeping) is True,
+                        half_life=settings.ROLE_EMOTION_HALF_LIFE, duration=settings.ROLE_ACTIVITY_SECONDS,
+                        update_pad=update_pad)
+                else:
+                    state.pop('role_activity_request', None)
+                    state.pop('role_beliefs', None)
                 self._update_state(state, now)
+                sleeping = pulse.get('is_sleeping', self.is_sleeping) is True
+                if sleeping and not self.is_sleeping:
+                    self.event_bus.publish(Event('memory.sleep', {}))
+                self.is_sleeping = sleeping
                 self.ready, self.last_error = True, None
                 return pulse
             except (ValueError, TypeError) as exc:
@@ -201,6 +283,7 @@ class StateManager:
                 except (ValueError, TypeError):
                     old_time = now
                 gap = now - old_time
+                self._advance_role(now, offline=True)
                 if settings.STATE_IS_DEFAULT:
                     gap = 0
                 conflict = has_time_conflict(self.current_state.get('客观情境', ''), now)
@@ -208,7 +291,7 @@ class StateManager:
                     prompt = (
                         f"启动场景准备。当前准确时间 {self._format_logical_time(now)}，时段 {time_period(now)}。"
                         f"上次状态距当前 {self._format_duration(abs(gap))}，时间方向 {'向前' if gap >= 0 else '回退'}。\n"
-                        f"上次状态仅为历史背景：{json.dumps(self.current_state, ensure_ascii=False)}\n"
+                        f"上次状态仅为历史背景：{json.dumps(self._model_state(), ensure_ascii=False)}\n"
                         "离线期间用户位置、行为与共同经历均未知。只推演角色自己的当前活动；"
                         "不得把旧状态中的明天、夜间或约定直接当作今天。"
                     )
@@ -225,18 +308,64 @@ class StateManager:
                 self.last_interaction_real_time = time.monotonic()
                 self.is_thinking = False
 
+    def _last_user_time(self):
+        for item in reversed(self.short_term_memory.get_memory().get('history', [])):
+            value = item.get('timestamp')
+            if item.get('role') == 'user' and type(value) in (int, float) and math.isfinite(value):
+                try:
+                    self._format_logical_time(value / 1000)
+                except (ValueError, OverflowError, OSError):
+                    continue
+                return value / 1000
+        return self._get_logical_now()
+
+    def scene_snapshot(self):
+        return expire_user_presence(self.current_state, self._presence_anchor(), self._get_logical_now())
+
+    def _presence_anchor(self):
+        confirmation = self.current_state.get('scene_confirmation', {})
+        stamp = confirmation.get('timestamp') if isinstance(confirmation, dict) else None
+        if type(stamp) in (int, float) and math.isfinite(stamp):
+            return max(self.last_dialogue_logical_time, stamp / 1000)
+        return self.last_dialogue_logical_time
+
+    def confirm_scene(self, scene):
+        """Called under the world operation lock; no model or dialogue is created."""
+        import uuid
+        now = self._get_logical_now()
+        state = copy.deepcopy(self.current_state)
+        state['scene'] = copy.deepcopy(scene)
+        state['客观情境'] = (f"角色所在地：{scene['character_location'] or '未知'}；"
+            f"用户所在地：{scene['user_location'] or '未知'}；当前活动待确认")
+        state['state_source'], state['scene_status'] = 'user_ui', 'ready'
+        state['scene_confirmation'] = {'id': str(uuid.uuid4()), 'source': 'user_ui',
+            'timestamp': int(now * 1000), 'scene': copy.deepcopy(scene)}
+        self._update_state(state, now)
+        self.ready, self.last_error = True, None
+        self.last_interaction_logical_time = now
+        self.last_interaction_real_time = time.monotonic()
+        self.state_update_timeout = settings.STATE_IDLE_MIN_TIMEOUT
+        return self.scene_snapshot()
+
+    def _expire_user_presence(self, now):
+        state = expire_user_presence(self.current_state, self._presence_anchor(), now)
+        if state != self.current_state:
+            self._update_state(state, now)
+
     def prepare_dialogue(self, user_text):
         with self.event_bus.operation_lock:
             self.is_thinking = True
             self.dialogue_count += 1
             try:
                 now = self._get_logical_now()
+                self._expire_user_presence(now)
                 interval = max(1, settings.STATE_UPDATE_INTERVAL)
                 history = self.short_term_memory.get_memory()['history']
                 prompt = (
                     f"这是回复前的场景更新，尚未生成本轮回答。\n当前准确时间：{self._format_logical_time(now)}"
-                    f"；时段：{time_period(now)}。\n当前状态：{json.dumps(self.current_state, ensure_ascii=False)}"
+                    f"；时段：{time_period(now)}。\n当前状态：{json.dumps(self._model_state(), ensure_ascii=False)}"
                     f"\n带时间的历史：{json.dumps(history, ensure_ascii=False)}"
+                    + (self.event_bus.experience.prompt_context() if hasattr(self.event_bus, 'experience') else '') +
                     f"\n本轮用户明确输入：{user_text}\n{settings.STATE_UPDATE_PROMPT}"
                     "\n日常接话可以沿用当前目标；状态更新故障不代表角色想盘问地点或疏远对方。"
                     "\n必须输出状态对象，其中 scene 字段包含双方位置、communication_mode 和 remote_contact_confirmed；scene_evidence 放在最外层。"
@@ -250,6 +379,7 @@ class StateManager:
                 self._fallback(self._get_logical_now(), str(exc))
             finally:
                 self.state_update_timeout = settings.STATE_IDLE_MIN_TIMEOUT
+                self.last_dialogue_logical_time = self._last_user_time()
                 self.last_interaction_logical_time = self._get_logical_now()
                 self.last_interaction_real_time = time.monotonic()
                 self.is_thinking = False
@@ -259,11 +389,14 @@ class StateManager:
         self.prepare_dialogue(event.data.get('text', ''))
 
     def _on_tick(self, event):
-        if self.event_bus.paused or self.event_bus.world_paused or getattr(self.event_bus, 'archive_active', False) or not self.ready:
+        if self.event_bus.paused or self.event_bus.world_paused or self.event_bus.pending_dialogues or getattr(self.event_bus, 'archive_active', False) or not self.ready:
             return
         if not self.event_bus.operation_lock.acquire(blocking=False):
             return
         try:
+            now = self._get_logical_now()
+            self._advance_role(now)
+            self._dispatch_due_offer()
             elapsed = time.monotonic() - self.last_interaction_real_time
             if elapsed > self._get_floating_timeout(self.state_update_timeout):
                 self.state_update_timeout = min(self.state_update_timeout * 1.5, settings.STATE_IDLE_MAX_TIMEOUT)
@@ -271,27 +404,81 @@ class StateManager:
         finally:
             self.event_bus.operation_lock.release()
 
+    def _advance_role(self, now, offline=False):
+        if not settings.ROLE_CONTINUITY_ENABLED or not self.current_state.get('role_continuity'):
+            return
+        previous = self.current_state['role_continuity']
+        state = continuity.advance(self.current_state, now, half_life=settings.ROLE_EMOTION_HALF_LIFE, sleeping=self.is_sleeping, offline=offline)
+        current = state['role_continuity']
+        if (current.get('events') != previous.get('events')
+                or now - previous.get('checkpoint_at', now - 60) >= 60):
+            current['checkpoint_at'] = now
+            self._update_state(state, now)
+
+    def delivery_gates(self):
+        bus = self.event_bus
+        online = getattr(bus, 'has_delivery_connection', lambda: True)()
+        return {'online': bool(online), 'quiet': bus.quiet, 'sleeping': self.is_sleeping,
+            'paused': bus.paused or bus.world_paused or bool(getattr(bus, 'archive_active', False)) or bool(bus.pending_dialogues)}
+
+    def proactive_offer(self):
+        history = self.short_term_memory.get_memory()['history']
+        policy = getattr(self.event_bus, 'proactive_policy', None)
+        experience = self.event_bus.experience.snapshot() if hasattr(self.event_bus, 'experience') else {}
+        candidates = companionship_offers(self.current_state if settings.ROLE_CONTINUITY_ENABLED else {}, experience, history, self._get_logical_now())
+        if isinstance(policy, EventProactivePolicy):
+            for offer in candidates:
+                if policy.check(history, offer, **self.delivery_gates())['allowed']:
+                    return offer
+        return candidates[0]
+
+    def _dispatch_due_offer(self):
+        policy = getattr(self.event_bus, 'proactive_policy', None)
+        if not isinstance(policy, EventProactivePolicy):
+            return
+        offer = self.proactive_offer()
+        history = self.short_term_memory.get_memory()['history']
+        if offer['kind'] != 'ordinary' and policy.check(history, offer, **self.delivery_gates())['allowed']:
+            self.event_bus.publish(Event('idle_speak', {'offer_id': offer['id']}))
+
     def _update_state_due_to_idle(self, now):
         self.is_thinking = True
         try:
+            self._expire_user_presence(now)
             info = self._get_idle_info(now)
+            history = self.short_term_memory.get_memory()['history']
+            new_turns = [row for row in history if type(row.get('timestamp')) in (int, float)
+                and row['timestamp'] > self.last_interaction_logical_time * 1000]
+            policy = getattr(self.event_bus, 'proactive_policy', None)
+            offer = self.proactive_offer() if isinstance(policy, EventProactivePolicy) else None
+            delivery = policy.check(history, offer, **self.delivery_gates()) if offer else policy.check(history) if policy else {'allowed': True, 'reason': 'ready'}
             prompt = (
                 f"空闲推演，非已确认事件。当前准确时间 {info['current_time']}；时段 {time_period(now)}；"
                 f"距离上次更新 {info['idle_duration']}。\n历史状态：{info['old_state']}\n"
-                f"带时间历史：{json.dumps(self.short_term_memory.get_memory()['history'], ensure_ascii=False)}"
+                f"本次间隔新增对白：{json.dumps(new_turns, ensure_ascii=False)}\n"
+                f"带时间历史背景：{json.dumps(history[-12:], ensure_ascii=False)}"
                 f"\n{settings.IDLE_STATE_UPDATE_PROMPT}"
+                "\n交流门槛校正：面对面时主动开口不要求添加远程联系方式；远程联系则必须已确认联系方式。"
+                "\nshould_speak、memory_encode、is_sleeping 必须使用 JSON 布尔值 true/false。"
+                "\n旧轨迹和旧内心是上次推演，不是这段时间的新事件。没有新的用户输入，不得重复解读同一句反馈并逐轮加重委屈、自卑或被冒犯感。"
+                "\n客观情境概括位置和活动。角色自己的轻微动作可自然出现，无需每次重复。晚上不等于深夜；不只因天黑就催用户休息。"
+                f"\n主动投递条件：{json.dumps(delivery, ensure_ascii=False)}；不允许时 should_speak 必须为 false，仍可平缓更新自己的活动。"
+                + delivery_rules(self.event_bus)
             )
             pulse = self._generate_state(prompt, now, allow_inferred=True, call_type='idle_evolve')
-            if pulse.get('memory_encode'):
+            if pulse.get('memory_encode') is True:
                 self.event_bus.publish(Event('memory.preprocess', {'reason': 'idle'}))
-            sleeping = pulse.get('is_sleeping') is True
+            sleeping = pulse.get('is_sleeping', self.is_sleeping) is True
+            self.last_proactive_evolution = {'at': int(now * 1000), 'reason':
+                'sleeping' if sleeping else delivery['reason'] if not delivery['allowed'] else
+                'no_content' if pulse.get('should_speak') is not True else 'offered'}
             if sleeping and not self.is_sleeping:
                 self.event_bus.publish(Event('memory.sleep', {}))
             self.is_sleeping = sleeping
             scene = self.current_state['scene']
-            can_speak = scene['communication_mode'] == 'face_to_face' or (
+            can_speak = web_companion(self.event_bus) or scene['communication_mode'] == 'face_to_face' or (
                 scene['communication_mode'] == 'remote' and scene['remote_contact_confirmed'])
-            if pulse.get('should_speak') and can_speak and not sleeping:
+            if pulse.get('should_speak') is True and can_speak and not sleeping and not self.event_bus.quiet and delivery['allowed']:
                 self.event_bus.publish(Event('idle_speak', {}))
         except Exception as exc:
             logger.exception("闲置演化失败")
@@ -303,18 +490,21 @@ class StateManager:
 
     def after_restore(self):
         self.current_state['scene'] = normalize_scene(self.current_state)
+        if settings.ROLE_CONTINUITY_ENABLED:
+            continuity.load_continuity(self.current_state)
         self.event_bus.restore_logical_time(self.current_state['对应时间'])
         self.last_interaction_logical_time = self._get_logical_now()
         self.last_interaction_real_time = time.monotonic()
+        self.last_dialogue_logical_time = self._last_user_time()
         self.state_update_timeout = settings.STATE_IDLE_MIN_TIMEOUT
         self.dialogue_count = 0
-        self.is_sleeping = False
+        self.is_sleeping = (self.current_state.get('role_continuity') or {}).get('sleeping') is True
         self.ready = True
 
     @property
     def prompt_injection(self):
         return (
-            f"\n【角色当前状态与事实来源】\n{self.state_zip_full}\n"
+            f"\n【角色当前状态与事实来源】\n{self.reply_state_zip}\n"
             f"【当前准确时间】{self.event_bus.formatted_logical_now}；{time_period(self.event_bus.logical_now)}\n"
             "事实优先级：系统时钟和结构化场景 > 本轮明确输入 > 带时间的历史 > 时间未知的旧历史。"
             "活动若标记 inferred 或 needs_confirmation，只是推演或待确认。不能假装知道用户位置，"
@@ -324,6 +514,8 @@ class StateManager:
             "未知位置、未确认联系方式只约束不能虚构物理动作，并不禁止接话、关心、讨论或邀请。"
             "不为普通闲聊逐项盘问位置和联系方式，也不因读不到旧记忆而重新自我介绍。"
             "来源与待确认标记用于内部判断，不在日常台词里反复解释协议或推演。"
+            "当前提醒能力：用户可在网页‘回忆→约定’核对确认后指定时间并开启提醒；"
+            "当前对话工具不含创建提醒，聊天里表达愿意帮忙不等于建立任务。尚未开启时，不承诺届时一定主动联系。"
             "优先回应对方这句话中的具体事情，并带上与你当前意图有关的真实偏好；不必每轮把话题引回近期目标。\n"
             "共同注意的对象必须有来源：能引用消息原文、用户提供的图片内容、已提交的活动材料或工具结果。"
             "远程时双方不自动共看同一页纸；没有共享材料时，不用‘你看这里/是不是这里’假装指给对方看。"
@@ -335,6 +527,23 @@ class StateManager:
     @property
     def state_zip_full(self):
         return self.state_zip + "\n近期综合轨迹:" + self.current_state.get('近期综合轨迹', '')
+
+    @property
+    def reply_state_zip(self):
+        state = self.current_state
+        context = (f"[状态 {state.get('对应时间', '')} | P:{state.get('P', 5)} A:{state.get('A', 5)} D:{state.get('D', 5)}]\n"
+            f"情境:{state.get('客观情境', '')}\n目标:{state.get('近期目标', '')}\n"
+            f"scene:{json.dumps(state.get('scene', {}), ensure_ascii=False)}\n"
+            f"来源:{state.get('state_source', 'legacy')}；场景状态:{state.get('scene_status', 'pending')}\n"
+            "状态是背景与候选意图，不是本轮对白脚本；优先回应用户当前的话。")
+        if settings.DIALOGUE_POLICY == 'expressive_v1':
+            view = current_reply_view(state, self.event_bus.logical_now)
+            if view:
+                context += ('\n【当前角色视角：主观感受与候选意图】\n' + json.dumps(view, ensure_ascii=False)
+                    + '\n可自然流露或改变表达，不必复述。感受不等于用户意图，打算不等于已完成。')
+        if settings.ROLE_CONTINUITY_ENABLED:
+            context += continuity.context(state, self.event_bus.logical_now)
+        return context
 
     @property
     def state_zip(self):

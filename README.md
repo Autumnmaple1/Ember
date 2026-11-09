@@ -1,6 +1,24 @@
 # Ember: - 数字生命引擎
 
+中期评审材料见 [提交说明](docs/midterm/01-reviewer-readme.md)、[总体规划](docs/midterm/00-delivery-plan.md)和[策划案内容源](docs/midterm/proposal.md)。运行 `python utils/build_midterm.py --site-only` 可构建独立展示入口；`python demo/launch.py` 启动预设台词展示，使用合成数据并显式标注边界。当前完成情况以这些材料及验证报告为准。
+
 当前产品主线为“持续角色陪伴＋共同活动”。首个[共同手册原型与使用说明](docs/shared-project-prototype.md)已加入“一起做点事”入口；长期方向见[下一阶段计划](docs/product-direction-2026-11.md)。
+
+规划草案：[Android／Windows 独立运行与局域网同步](docs/local-first-dual-device-plan.md)。已确认继续使用在线模型 API；双端安装版尚未实施，当前容器版保持可用。
+
+新增[共同材料与返回衔接](docs/continuity-second-pass.md)：从已保存的用户消息选取“一起看这段”，在“接着上次”找回材料和既有进度；长间隔后不沿用旧用户位置。需重启后端并刷新前端。
+
+新增[常驻服务与本机容器验证](docs/service-deployment.md)：单用户登录、设备撤销、同源手机网页、持久备份任务和每日用量限制。当前已做隔离容器验证；常开设备与远程部署稍后确定，原业务世界尚未迁入。
+
+[心跳与主动发言检查](docs/heartbeat-proactive-check.md)说明空闲推演、主动触发门槛、场景未知时的限制，以及最新验证与修复。
+
+[场景与主动陪伴设置](docs/scene-and-proactive-settings.md)：当前情境可直接保存，不再发送确认对话；网页主动发言由设置中的开关与勿扰偏好控制，不依赖故事里的微信或电话。
+
+[情境保存与异常回复修复](docs/scene-save-and-reply-repair.md)：面对面改为填写共同位置，保存反馈靠近按钮；主动发言增加现实时间间隔与等待回应规则，减少旧推演反复影响回复。
+
+[对话约束重整规划](docs/dialogue-policy-redesign.md)：分开事实边界、角色创作空间、表达偏好与投递节奏。各阶段工程实现与有限评阅已交付；长期人物表现继续通过实际使用观察。
+
+2026-11-08：[对话重整完整交付](docs/dialogue-policy-completion.md)加入事件驱动的情绪、角色自有笔记活动、主动预算与明确网页提醒；[验证与评阅](docs/dialogue-policy-evaluation.md)记录真实模型抽查及仍存在的表达局限。使用“回忆 → 活动回顾”查看她的近况，在已确认约定中单独开启提醒。
 
 短期窗口、中期工作记忆、长期编码及召回的最新流程、生效和回退步骤见[三层记忆衔接说明](docs/memory-pipeline-repair.md)。
 
@@ -105,6 +123,30 @@
 ---
 
 ## 📦 快速上手
+
+### Windows 容器版：一键启动（推荐）
+
+1. 安装 Docker Desktop，使用 Linux 容器。首次启动需能联网下载镜像和依赖；宿主机无需另装 Python、Node.js 或 Conda。
+2. 首次使用先把 `.env.example` 复制为 `.env`，填写大模型、小模型、向量模型的 API 地址、密钥与模型名。已有 `.env` 的用户直接沿用。
+3. 双击项目根目录的 **`start_service.bat`**。脚本会检查并尝试打开 Docker Desktop，首次构建镜像、生成独立服务配置，等待数据库及后端就绪后自动打开网页。
+4. 默认访问 **http://localhost:8080**，在自己的编辑器中打开 `deploy/private/owner-code.txt`，将访问码输入登录页。访问码不会输出到控制台。
+5. 日常继续双击 `start_service.bat`；它复用配置和数据卷，并构建当前代码。停止运行请双击 **`stop_service.bat`**，数据保留。关闭 BAT 窗口不会停止后台服务。
+
+也可以在项目目录执行：
+
+```powershell
+.\start_service.bat
+.\start_service.bat -NoBrowser  # 启动但不自动打开浏览器
+.\stop_service.bat
+```
+
+首次生成后，服务实际使用 **`deploy/service.env`**；修改模型、端口或域名应改这个文件，再启动一次。仅修改原 `.env` 不会覆盖服务配置。缺少模型项时脚本会提示字段名称；失败时保留窗口显示原因，不报告启动成功。
+
+容器版使用独立数据库和角色世界，旧本地聊天不会自动出现；接入原世界、备份与回退见[常驻服务说明](docs/service-deployment.md)。宿主机需要持续开机；手机局域网访问需另按该说明配置。
+
+### 本地开发版：沿用原数据库与前后端开发服务
+
+以下是原有本地开发启动方式，入口为 `run_all.bat`，使用 http://localhost:8000 和 http://localhost:5173；需要本机 Python / Conda / Node.js。它与上面的容器版是两个独立入口。
 
 ### 1. 环境准备
 - **Python 3.11** (推荐使用 Conda 管理环境)

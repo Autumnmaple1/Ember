@@ -47,6 +47,7 @@ class EntityExtractionMemory:
                     host=settings.PG_HOST,
                     port=settings.PG_PORT,
                     connect_timeout=5,
+                    options='-c timezone=Asia/Shanghai -c search_path=public',
                 )
                 initialize_episodic(self.conn)
                 self.conn.commit()

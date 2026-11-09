@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "test": "node --test tests/*.test.mjs",
-    "test:browser": "node tests/experience.browser.mjs && node tests/turns.browser.mjs && node tests/remaining.browser.mjs",
+    "test:browser": "node tests/experience.browser.mjs && node tests/turns.browser.mjs && node tests/remaining.browser.mjs && node tests/audio.browser.mjs && node tests/scene.browser.mjs",
     "lint": "eslint .",
     "preview": "vite preview"
   },

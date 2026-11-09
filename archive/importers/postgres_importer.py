@@ -92,6 +92,7 @@ class PostgresImporter(BaseImporter):
                     user=self.user,
                     password=self.password,
                     connect_timeout=10,
+                    options='-c timezone=Asia/Shanghai -c search_path=public',
                 )
                 self.logger.debug(f"数据库连接成功 (尝试 {attempt + 1}/{retries})")
                 return conn
@@ -383,7 +384,10 @@ class PostgresImporter(BaseImporter):
         matches = self._extract_values_from_sql(sql_content)
 
         if not matches:
-            # 没有数据需要导入，返回 0
+            import re
+            if re.search(r'^\s*(?:INSERT\s+INTO|COPY)\b', sql_content, re.I | re.M):
+                raise ValueError('存档包含不支持的表命名空间或数据格式，拒绝当作空表恢复')
+            # An explicitly empty dump has no data statements.
             self.logger.debug(f"表 {table_name} 没有 INSERT 语句，跳过导入")
             return 0
 
